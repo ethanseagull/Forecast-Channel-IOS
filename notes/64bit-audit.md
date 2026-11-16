@@ -58,8 +58,8 @@ or a layout change, it keeps the severity of the underlying problem.
    - Affected slots: `TextureData` (name/texture/tlut), the `EmitterResource` name, `ParticleParameterDesc::mTexture[3]`, and the anim-curve texture table.
    - Texel bytes get overwritten, and the GPU is handed a misaligned image (details under ef).
 5. **The channel code hard-codes 32-bit object layouts.** No compiler flag catches these.
-   - `lyt::Pane` offsets at `LayoutObj.cpp:47-59`.
-   - The `TextBox` color at `+0xD8`: `LayoutObj.cpp:146`, `LayoutButton.cpp:113`, `WeatherAround.cpp:1631`.
+   - `lyt::Pane` offsets at `LayoutObj.cpp:47-59`. Fixed: member access under `FORECAST_PORT`.
+   - The `TextBox` color at `+0xD8`: `LayoutObj.cpp:146`, `LayoutButton.cpp:113`, `WeatherAround.cpp:1631`. Fixed the same way.
    - An opaque 0x4C-byte stand-in for ef's `MemoryManager` at `Scene.cpp:21-56`. The real object is about 0x78-0x80 bytes, so constructing it overflows its heap block.
 
 Close behind: g3d `ResTexPlttInfoData` (MDL0) has two pointer members written at bind time; and
@@ -372,8 +372,10 @@ for the formats.
   - On 64-bit the visible-flag write corrupts the Pane, and name lookups read garbage.
   - `LayoutButton.cpp:22-28` defines the same inline functions through members. That is an ODR clash: the linker may pick either copy, so the 6 `SetPaneVisible` calls in LayoutButton (`:554-657`) are affected too.
   - Fix: `Pane::GetName()`, `GetUserData()` and `SetVisible()`, with one definition.
+  - **Fixed:** the port uses the members (`FORECAST_PORT`; the Wii keeps the offsets, which match). Both copies of each helper now do the same thing on the port.
 - **[High]** `src/LayoutObj.cpp:146`, `src/LayoutButton.cpp:113`, `src/WeatherAround.cpp:1631` — `SetTextBoxColors` writes `TextBox::mTextColors` through `(u8*)textBox + 0xD8`, which is the wrong field on 64-bit.
   - Fix: `TextBox::SetTextColor(0/1, c)`, or a small accessor.
+  - **Fixed:** `SetTextColor(0/1, c)` under `FORECAST_PORT` in all three.
 - **[High]** `src/System.cpp:1245-1255` and `:1223-1235` — the global `operator new`/`new[]` and `MEM1Alloc`/`MEM2Alloc` with `align == 0` use 4-byte alignment.
   - Clang assumes `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16) for `operator new` results, so aligned SSE/NEON stores into new'd objects can fault. The `new[]` cookie (`size_t`) and the pointers in `new CityForecast[n]` (and 7 similar in `ForecastData.cpp:160-286`) are misaligned.
   - The replacement also catches CRT, libc++ and SDL allocations made before `SystemInit`, while `gMEM1Heap` is NULL.

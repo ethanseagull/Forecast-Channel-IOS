@@ -1336,11 +1336,84 @@ index a680f42..2706b41 100644
  
  // One texture of a weather icon
  struct IconLayer {
+diff --git a/src/LayoutButton.cpp b/src/LayoutButton.cpp
+index a1af741..615d315 100644
+--- a/src/LayoutButton.cpp
++++ b/src/LayoutButton.cpp
+@@ -110,9 +110,14 @@ inline void SetTextBoxColors(nw4r::lyt::TextBox* textBox, nw4r::ut::Color top, n
+     // Writes the protected TextBox::mTextColors directly, like LayoutObj.cpp and
+     // WeatherAround.cpp: the original does not call TextBox::SetTextColor, which is a
+     // function of its own in this nw4r version.
++#ifdef FORECAST_PORT
++    textBox->SetTextColor(0, top);
++    textBox->SetTextColor(1, bottom);
++#else
+     nw4r::ut::Color* colors = reinterpret_cast<nw4r::ut::Color*>(reinterpret_cast<u8*>(textBox) + 0xD8);
+     colors[0] = top;
+     colors[1] = bottom;
++#endif
+ }
+ 
+ // Sets TEV color 0 or 1 (RGB) of every material in the pane's tree, except under panes
 diff --git a/src/LayoutObj.cpp b/src/LayoutObj.cpp
-index 7e3093c..3f1c273 100644
+index 7e3093c..72772f3 100644
 --- a/src/LayoutObj.cpp
 +++ b/src/LayoutObj.cpp
-@@ -857,7 +857,13 @@ void LayoutObj::Calc() {
+@@ -41,21 +41,34 @@ extern const GXColor gTypeHighlightColor1[10];
+ 
+ static u8 sFlag;
+ 
+-// The game's lyt::Pane has a different layout from the one in nw4r/lyt/lyt_pane.h, so these
+-// helpers reach its fields by offset.
++// The original reaches these lyt::Pane fields by offset (mName at 0xB4, mUserData at 0xC4,
++// mFlag at 0xCF), and the offset code is what matches. The port uses the members: the
++// offsets are only right for the Wii's 32-bit layout.
+ 
+ static inline const char* GetPaneName(nw4r::lyt::Pane* pane) {
++#ifdef FORECAST_PORT
++    return pane->GetName();
++#else
+     return (const char*)pane + 0xB4;
++#endif
+ }
+ 
+ // Not static: LayoutButton calls the out-of-line copies of these two that this unit emits.
+ inline void SetPaneVisible(nw4r::lyt::Pane* pane, bool visible) {
++#ifdef FORECAST_PORT
++    pane->SetVisible(visible);
++#else
+     u8* flag = (u8*)pane + 0xCF;
+     *flag = (*flag & 0xFE) | visible;
++#endif
+ }
+ 
+ inline const char* GetPaneUserData(nw4r::lyt::Pane* pane) {
++#ifdef FORECAST_PORT
++    return pane->GetUserData();
++#else
+     return (const char*)pane + 0xC4;
++#endif
+ }
+ 
+ GXColor LerpColor(const GXColor* a, const GXColor* b, s32 num, s32 den);
+@@ -142,10 +155,15 @@ void SetPaneTextColor(nw4r::lyt::Pane* pane, const GXColor* color) {
+ // Defined after SetPaneTextColor, so that call is not inlined (the linker keeps the copy from
+ // WeatherAround). Its Color copy places the out-of-line GXColor assignment Draw calls.
+ inline void SetTextBoxColors(nw4r::lyt::TextBox* textBox, nw4r::ut::Color top, nw4r::ut::Color bottom) {
+-    // TextBox::mTextColors is protected
++#ifdef FORECAST_PORT
++    textBox->SetTextColor(0, top);
++    textBox->SetTextColor(1, bottom);
++#else
++    // TextBox::mTextColors (0xD8) is protected
+     nw4r::ut::Color* colors = (nw4r::ut::Color*)((u8*)textBox + 0xD8);
+     colors[0] = top;
+     colors[1] = bottom;
++#endif
+ }
+ 
+ // Sets the TEV color (which = 0: color 0, 1: color 1) of every material under the pane,
+@@ -857,7 +875,13 @@ void LayoutObj::Calc() {
          mFadeFrame--;
      }
  
@@ -1721,6 +1794,27 @@ index 1ce7d42..12f74e4 100644
          if (mSelected == NULL) {
              mSelected = mEntries;
          }
+diff --git a/src/WeatherAround.cpp b/src/WeatherAround.cpp
+index df8263c..4ed0250 100644
+--- a/src/WeatherAround.cpp
++++ b/src/WeatherAround.cpp
+@@ -1627,10 +1627,15 @@ Vector2 WeatherAround::GetTempSizeLarge(CityLabel* label) {
+ }
+ 
+ inline void SetTextBoxColors(nw4r::lyt::TextBox* textBox, nw4r::ut::Color top, nw4r::ut::Color bottom) {
+-    // TextBox::mTextColors is protected
++#ifdef FORECAST_PORT
++    textBox->SetTextColor(0, top);
++    textBox->SetTextColor(1, bottom);
++#else
++    // TextBox::mTextColors (0xD8) is protected
+     nw4r::ut::Color* colors = (nw4r::ut::Color*)((u8*)textBox + 0xD8);
+     colors[0] = top;
+     colors[1] = bottom;
++#endif
+ }
+ 
+ static void ZoomOutColorCallback(nw4r::lyt::Pane* pane, const GXColor* color) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
 index 661a8c4..42c94f6 100644
 --- a/src/WeatherScene.cpp

@@ -138,16 +138,15 @@ How the 64-bit problems are handled (details in `patches/decomp-port.patch`, all
   emulated with arm64's result (`port/sdk/crash_win.c`).
 - 157 unported SDK functions are generated stubs (`port/sdk/autostubs.c`), logged on first use.
 
+- `lyt::Pane` name / user data / visibility and `TextBox` text colors go through the
+  members on the port; the Wii build keeps the original hard-coded offsets.
+
 Off on the port (each marked in the source):
 - Cursor sparkle effect: dropped for good (touch devices draw no cursor; `Scene.cpp`
   never loads breff/breft). The cursor sprite drawing goes the same way in milestone 2.
 - Sound, temporarily (brsar not converted, AX not ported; `Sound.cpp`, `SoundManager.cpp`).
 
 ### Next (from `notes/64bit-audit.md`, before or during milestone 2)
-- **Channel code reaches into `lyt::Pane` / `TextBox` by hard-coded Wii offsets**
-  (`LayoutObj.cpp:47-59`, `LayoutButton.cpp:22-28`, TextBox color at `+0xD8`): wrong on
-  64-bit. Replace with real member access under `FORECAST_PORT`. Highest priority: it
-  corrupts pane flags as soon as layouts animate.
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
 - snd TaskManager 0x40-byte units vs larger 64-bit tasks (when sound comes back).
 - (ef relocation items: moot, the cursor effect is dropped.)

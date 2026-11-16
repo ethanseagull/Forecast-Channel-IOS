@@ -91,13 +91,7 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 
 ## Open work, in priority order
 
-1. **Hard-coded Wii offsets into `lyt::Pane` / `TextBox`** (`LayoutObj.cpp:47-59`
-   name +0xB4, user data +0xC4, visibility flag +0xCF; `LayoutButton.cpp:22-28`
-   duplicates them; TextBox color +0xD8 in `LayoutObj.cpp:146`,
-   `LayoutButton.cpp:113`, `WeatherAround.cpp:1631`). Wrong on 64-bit and
-   writes into the wrong field. Replace with real member access under
-   `FORECAST_PORT`. Do before or at the start of milestone 2.
-2. **Milestone 2: draw the 2D layouts.** Replace `gx_null.cpp` with an SDL3 GPU
+1. **Milestone 2: draw the 2D layouts.** Replace `gx_null.cpp` with an SDL3 GPU
    backend: vertex transform from XF state, TEV stages -> generated shaders,
    texture decode (forecast-3ds `port/gx/gx_tex.cpp` has decoders for RGB5A3,
    I4/I8/IA4/IA8, CMPR; its citro3d upload is not reusable), EFB copies.
@@ -105,23 +99,23 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    touch (mouse button on Windows) is the Wii pointer with A held; no touch =
    pointer off screen (`port_pointer()` in `platform.c` is ready). Stop the
    cursor sprite from being drawn (`Cursor` in `Scene.cpp`).
-3. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
+2. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
-4. **Milestone 3: forecast data.** NWC24/VF are stubs; fetch `forecast.bin` /
+3. **Milestone 3: forecast data.** NWC24/VF are stubs; fetch `forecast.bin` /
    `short.bin` from `http://fore.wiilink24.com/...` and feed them where the
    channel's VF/NWC24 reads expect them. `forecast.bin` parsing is 64-bit safe
    (offsets only, per the audit).
-5. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
+4. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
    arrays (globe, milestone 4); snd TaskManager unit size (with sound); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
    items are moot (cursor effect dropped).
-6. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
+5. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
    remove the port skips.
-7. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
+6. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
    runner, unsigned .ipa artifact, SDL touch events into the same pointer path
    as the mouse, Files-app import of the channel contents, ATS exception for
    WiiLink's plain HTTP. Watch for `long` (64-bit on iOS, 32 on Windows) in
    anything the audit missed.
-8. **Touch design** (milestone 7, with the iPhone layout): replacements for
+7. **Touch design** (milestone 7, with the iPhone layout): replacements for
    hover highlights, B (back), +/- (globe zoom: pinch), 1/2; bigger hit areas.
