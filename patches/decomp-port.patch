@@ -1,0 +1,3679 @@
+﻿diff --git a/include/macros.h b/include/macros.h
+index 23a63c4..d0b8405 100644
+--- a/include/macros.h
++++ b/include/macros.h
+@@ -55,6 +55,30 @@
+ // Distance between pointers
+ #define PTR_DISTANCE(start, end) ((u8*)(end) - (u8*)(start))
+ 
++// Pointer <-> integer conversions that the ForecastOS port (64-bit hosts)
++// must widen or translate. On the Wii they are the original casts.
++//   PTR_ADDR(p)        pointer as an integer, for arithmetic and alignment
++//   GX_ADDR(p)         pointer as a 32-bit address the GPU / DSP reads
++//   PTR_TO_U32(p)      pointer kept in a 32-bit slot (handle, id, callback data)
++//   U32_TO_PTR(T, v)   the reverse of PTR_TO_U32 / GX_ADDR
++//   PTR32(T)           a T* member of a struct that overlays file data
++//                      (port_ptr32.h: stays 4 bytes on the port)
++#ifdef FORECAST_PORT
++#include <port_mem.h>
++#include <port_ptr32.h>
++#define PTR_ADDR(p) ((uintptr_t)(p))
++#define GX_ADDR(p) port_gx_addr((const void*)(p))
++#define PTR_TO_U32(p) port_gx_addr((const void*)(p))
++#define U32_TO_PTR(T, v) ((T)port_gx_ptr((u32)(v)))
++#else
++#define PTR_ADDR(p) ((u32)(p))
++#define GX_ADDR(p) ((u32)(p))
++#define PTR_TO_U32(p) ((u32)(p))
++#define U32_TO_PTR(T, v) ((T)(v))
++#define PTR32(T) T*
++#define PTR32_RAW(field) ((u32)(field))
++#endif
++
+ /******************************************************************************
+  *
+  * Arrays
+diff --git a/include/nw4r/ef/ef_effect.h b/include/nw4r/ef/ef_effect.h
+index 13e8c3d..cfb1876 100644
+--- a/include/nw4r/ef/ef_effect.h
++++ b/include/nw4r/ef/ef_effect.h
+@@ -94,20 +94,20 @@ public:
+                                         bool ignoreLifeStatus = false) {
+         ForeachParticleManager(
+             ParticleManager::ModifierTravFunc_SetSimpleLightAmbient,
+-            reinterpret_cast<u32>(&rColor), ignoreLifeStatus);
++            reinterpret_cast<ForEachParam>(&rColor), ignoreLifeStatus);
+     }
+ 
+     // @bug Surely meant to be a const reference...
+     void Modifier_SetScale(math::VEC2& rScale, bool ignoreLifeStatus = false) {
+         ForeachParticleManager(ParticleManager::ModifierTravFunc_SetScale,
+-                               reinterpret_cast<u32>(&rScale),
++                               reinterpret_cast<ForEachParam>(&rScale),
+                                ignoreLifeStatus);
+     }
+ 
+     void Modifier_SetRotate(const math::VEC3& rRot,
+                             bool ignoreLifeStatus = false) {
+         ForeachParticleManager(ParticleManager::ModifierTravFunc_SetRotate,
+-                               reinterpret_cast<u32>(&rRot), ignoreLifeStatus);
++                               reinterpret_cast<ForEachParam>(&rRot), ignoreLifeStatus);
+     }
+ 
+     bool GetFlagDisableCalc() const {
+diff --git a/include/nw4r/ef/ef_memorymanagerimpl.h b/include/nw4r/ef/ef_memorymanagerimpl.h
+index 86820d4..4768ead 100644
+--- a/include/nw4r/ef/ef_memorymanagerimpl.h
++++ b/include/nw4r/ef/ef_memorymanagerimpl.h
+@@ -162,7 +162,7 @@ NW4R_EF_MEMORY_MANAGER_CLASS::NW4R_EF_MEMORY_MANAGER_CLASS(
+ 
+     mHeapEndAddr = static_cast<u8*>(pStartAddr) + size;
+     mHeapStartAddr = reinterpret_cast<u8*>(
+-        ::nw4r::ut::RoundUp(reinterpret_cast<u32>(pStartAddr), 32));
++        ::nw4r::ut::RoundUp(PTR_ADDR(pStartAddr), 32));
+ 
+     mLeastEffect = maxEffect;
+     mLeastEmitter = maxEmitter;
+diff --git a/include/nw4r/ef/ef_res_emitter.h b/include/nw4r/ef/ef_res_emitter.h
+index f05b236..fa095ef 100644
+--- a/include/nw4r/ef/ef_res_emitter.h
++++ b/include/nw4r/ef/ef_res_emitter.h
+@@ -9,6 +9,10 @@
+ 
+ #include <revolution/GX.h>
+ 
++#ifdef FORECAST_PORT
++#include <port_mem.h>
++#endif
++
+ namespace nw4r {
+ namespace ef {
+ 
+@@ -349,6 +353,18 @@ public:
+         return ppTbl;
+     }
+ 
++#ifdef FORECAST_PORT
++    // The track tables are 32-bit slots in the resource; LocateTracks stores
++    // GX addresses (port_mem.h) in them instead of 64-bit pointers.
++    u8* GetPtclTrack(u16 idx) {
++        u32* pTbl = reinterpret_cast<u32*>(GetPtclTrackTbl());
++        return (u8*)port_gx_ptr(pTbl[idx]);
++    }
++    u8* GetEmitTrack(u16 idx) {
++        u32* pTbl = reinterpret_cast<u32*>(GetEmitTrackTbl());
++        return (u8*)port_gx_ptr(pTbl[idx]);
++    }
++#else
+     u8* GetPtclTrack(u16 idx) {
+         u8** ppTbl = GetPtclTrackTbl();
+         return ppTbl[idx];
+@@ -357,6 +373,7 @@ public:
+         u8** ppTbl = GetEmitTrackTbl();
+         return ppTbl[idx];
+     }
++#endif
+ 
+     void LocateTracks() {
+         u8* pTail = SkipParticleParameterDesc();
+@@ -373,12 +390,20 @@ public:
+ 
+         int i;
+         for (i = 0; i < NumPtclTrack(); i++) {
++#ifdef FORECAST_PORT
++            pPtclPtrTbl[i] = port_gx_addr(pTail);
++#else
+             pPtclPtrTbl[i] = reinterpret_cast<u32>(pTail);
++#endif
+             pTail += pPtclSizeTbl[i];
+         }
+ 
+         for (i = 0; i < NumEmitTrack(); i++) {
++#ifdef FORECAST_PORT
++            pEmitPtrTbl[i] = port_gx_addr(pTail);
++#else
+             pEmitPtrTbl[i] = reinterpret_cast<u32>(pTail);
++#endif
+             pTail += pEmitSizeTbl[i];
+         }
+     }
+diff --git a/include/nw4r/ef/ef_types.h b/include/nw4r/ef/ef_types.h
+index 08c237c..ed41de7 100644
+--- a/include/nw4r/ef/ef_types.h
++++ b/include/nw4r/ef/ef_types.h
+@@ -56,7 +56,12 @@ enum EvaluateStatus {
+     NW4R_EF_ES_SKIP,
+ };
+ 
++#ifdef FORECAST_PORT
++// Carries pointers to callers' objects (often on the stack): full width.
++typedef uintptr_t ForEachParam;
++#else
+ typedef u32 ForEachParam;
++#endif
+ typedef void (*ForEachFunc)(void* pObject, ForEachParam param);
+ 
+ inline u8 ConvertF32RadToU8(f32 rad) {
+diff --git a/include/nw4r/g3d/g3d_obj.h b/include/nw4r/g3d/g3d_obj.h
+index b47b932..cee1dbc 100644
+--- a/include/nw4r/g3d/g3d_obj.h
++++ b/include/nw4r/g3d/g3d_obj.h
+@@ -50,7 +50,13 @@ public:
+ 
+         u32 GetTypeID() const {
+             // @note Address is used for comparing TypeObjs
++#ifdef FORECAST_PORT
++            // Type names are static data in one executable image (< 4 GB), so
++            // the low 32 bits still tell them apart.
++            return static_cast<u32>(reinterpret_cast<uintptr_t>(mName));
++#else
+             return reinterpret_cast<u32>(mName);
++#endif
+         }
+ 
+         const char* GetTypeName() const {
+diff --git a/include/nw4r/g3d/platform/g3d_cpu.h b/include/nw4r/g3d/platform/g3d_cpu.h
+index c19e16a..741a896 100644
+--- a/include/nw4r/g3d/platform/g3d_cpu.h
++++ b/include/nw4r/g3d/platform/g3d_cpu.h
+@@ -42,6 +42,9 @@ inline f32 U16_0ToF32(const u16* pPtr) {
+  *
+  ******************************************************************************/
+ inline f32 S7_8ToF32(register const s16* pPtr) {
++#ifdef FORECAST_PORT
++    return (f32)*pPtr / 256.0f;
++#else
+     register f32 f;
+ 
+     ASM (
+@@ -49,9 +52,13 @@ inline f32 S7_8ToF32(register const s16* pPtr) {
+     )
+ 
+     return f;
++#endif
+ }
+ 
+ inline f32 S10_5ToF32(register const s16* pPtr) {
++#ifdef FORECAST_PORT
++    return (f32)*pPtr / 32.0f;
++#else
+     register f32 f;
+ 
+     ASM (
+@@ -59,6 +66,7 @@ inline f32 S10_5ToF32(register const s16* pPtr) {
+     )
+ 
+     return f;
++#endif
+ }
+ 
+ /******************************************************************************
+@@ -73,6 +81,12 @@ inline u8 F32ToU8_0(f32 f) {
+ }
+ 
+ inline s16 F32ToS10_5(register f32 f) {
++#ifdef FORECAST_PORT
++    f32 v = f * 32.0f;
++    if (v > 32767.0f) v = 32767.0f;
++    if (v < -32768.0f) v = -32768.0f;
++    return (s16)v;
++#else
+     s16 x;
+     register s16* pPtr = &x;
+ 
+@@ -81,6 +95,7 @@ inline s16 F32ToS10_5(register f32 f) {
+     )
+ 
+     return x;
++#endif
+ }
+ 
+ /******************************************************************************
+diff --git a/include/nw4r/lyt/lyt_common.h b/include/nw4r/lyt/lyt_common.h
+index 4f3a828..df73465 100644
+--- a/include/nw4r/lyt/lyt_common.h
++++ b/include/nw4r/lyt/lyt_common.h
+@@ -141,7 +141,13 @@ inline bool IsCITexelFormat(GXTexFmt format) {
+ }
+ 
+ inline s32 GetSignatureInt(const char* pSignature) {
++#ifdef FORECAST_PORT
++    // Signatures are character strings; FOURCC() builds them big-endian.
++    const u8* p = reinterpret_cast<const u8*>(pSignature);
++    return static_cast<s32>(p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]);
++#else
+     return *reinterpret_cast<const s32*>(pSignature);
++#endif
+ }
+ 
+ inline const char* GetStrTableStr(const void* pTable, int index) {
+diff --git a/include/nw4r/math/math_arithmetic.h b/include/nw4r/math/math_arithmetic.h
+index 8734c75..d16b4f1 100644
+--- a/include/nw4r/math/math_arithmetic.h
++++ b/include/nw4r/math/math_arithmetic.h
+@@ -32,6 +32,9 @@ f32 FrSqrt(f32 x);
+ u32 CntBit1(u32 x);
+ 
+ inline f32 FAbs(register f32 x) {
++#ifdef FORECAST_PORT
++    return __builtin_fabsf(x);
++#else
+     register f32 ax;
+ 
+     ASM (
+@@ -39,6 +42,7 @@ inline f32 FAbs(register f32 x) {
+     )
+ 
+     return ax;
++#endif
+ }
+ 
+ inline f32 FCeil(f32 x) {
+@@ -54,6 +58,9 @@ inline f32 FFloor(f32 x) {
+ }
+ 
+ inline f32 FInv(register f32 x) {
++#ifdef FORECAST_PORT
++    return 1.0f / x;
++#else
+     register f32 work0, work1;
+ 
+     ASM (
+@@ -63,6 +70,7 @@ inline f32 FInv(register f32 x) {
+     )
+ 
+     return work0;
++#endif
+ }
+ 
+ inline f32 FMod(f32 x, f32 y) {
+@@ -87,6 +95,9 @@ inline f32 FLog(f32 x) {
+ 
+ inline f32 FSelect(register f32 value, register f32 ge_zero,
+                    register f32 lt_zero) {
++#ifdef FORECAST_PORT
++    return value >= 0.0f ? ge_zero : lt_zero;
++#else
+     register f32 ret;
+ 
+     ASM (
+@@ -94,6 +105,7 @@ inline f32 FSelect(register f32 value, register f32 ge_zero,
+     )
+ 
+     return ret;
++#endif
+ }
+ 
+ /******************************************************************************
+diff --git a/include/nw4r/math/math_types.h b/include/nw4r/math/math_types.h
+index 3c593d8..568d8c0 100644
+--- a/include/nw4r/math/math_types.h
++++ b/include/nw4r/math/math_types.h
+@@ -328,6 +328,10 @@ VEC3* VEC3TransformNormal(VEC3* pOut, const MTX34* pMtx, const VEC3* pVec);
+ 
+ inline VEC3* VEC3Add(register VEC3* pOut, register const VEC3* pA,
+                      register const VEC3* pB) {
++#ifdef FORECAST_PORT
++    pOut->x = pA->x + pB->x; pOut->y = pA->y + pB->y; pOut->z = pA->z + pB->z;
++    return pOut;
++#else
+     register f32 work0, work1, work2;
+ 
+     ASM (
+@@ -345,9 +349,13 @@ inline VEC3* VEC3Add(register VEC3* pOut, register const VEC3* pA,
+     )
+ 
+     return pOut;
++#endif
+ }
+ 
+ inline f32 VEC3Dot(register const VEC3* pA, register const VEC3* pB) {
++#ifdef FORECAST_PORT
++    return pA->x * pB->x + pA->y * pB->y + pA->z * pB->z;
++#else
+     register f32 dot;
+     register f32 work0, work1, work2, work3;
+ 
+@@ -367,9 +375,13 @@ inline f32 VEC3Dot(register const VEC3* pA, register const VEC3* pB) {
+     )
+ 
+     return dot;
++#endif
+ }
+ 
+ inline f32 VEC3LenSq(register const VEC3* pVec) {
++#ifdef FORECAST_PORT
++    return pVec->x * pVec->x + pVec->y * pVec->y + pVec->z * pVec->z;
++#else
+     register f32 work0, work1, work2;
+ 
+     ASM (
+@@ -386,10 +398,17 @@ inline f32 VEC3LenSq(register const VEC3* pVec) {
+     )
+ 
+     return work2;
++#endif
+ }
+ 
+ inline VEC3* VEC3Lerp(register VEC3* pOut, register const VEC3* pVec1,
+                       register const VEC3* pVec2, register f32 t) {
++#ifdef FORECAST_PORT
++    pOut->x = pVec1->x + (pVec2->x - pVec1->x) * t;
++    pOut->y = pVec1->y + (pVec2->y - pVec1->y) * t;
++    pOut->z = pVec1->z + (pVec2->z - pVec1->z) * t;
++    return pOut;
++#else
+     register f32 work0, work1, work2;
+ 
+     ASM (
+@@ -411,10 +430,15 @@ inline VEC3* VEC3Lerp(register VEC3* pOut, register const VEC3* pVec1,
+     )
+ 
+     return pOut;
++#endif
+ }
+ 
+ inline VEC3* VEC3Scale(register VEC3* pOut, register const VEC3* pIn,
+                        register f32 scale) {
++#ifdef FORECAST_PORT
++    pOut->x = pIn->x * scale; pOut->y = pIn->y * scale; pOut->z = pIn->z * scale;
++    return pOut;
++#else
+     register f32 work0, work1;
+ 
+     ASM (
+@@ -430,10 +454,15 @@ inline VEC3* VEC3Scale(register VEC3* pOut, register const VEC3* pIn,
+     )
+ 
+     return pOut;
++#endif
+ }
+ 
+ inline VEC3* VEC3Sub(register VEC3* pOut, register const VEC3* pA,
+                      register const VEC3* pB) {
++#ifdef FORECAST_PORT
++    pOut->x = pA->x - pB->x; pOut->y = pA->y - pB->y; pOut->z = pA->z - pB->z;
++    return pOut;
++#else
+     register f32 work0, work1, work2;
+ 
+     ASM (
+@@ -451,6 +480,7 @@ inline VEC3* VEC3Sub(register VEC3* pOut, register const VEC3* pA,
+     )
+ 
+     return pOut;
++#endif
+ }
+ 
+ inline VEC3* VEC3Cross(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+diff --git a/include/nw4r/snd/snd_AxfxImpl.h b/include/nw4r/snd/snd_AxfxImpl.h
+index e2ad2f7..8c5b70c 100644
+--- a/include/nw4r/snd/snd_AxfxImpl.h
++++ b/include/nw4r/snd/snd_AxfxImpl.h
+@@ -28,7 +28,7 @@ struct AxfxImpl {
+     void HookAlloc(AXFXAllocHook* pAllocHook, AXFXFreeHook* pFreeHook);
+     void RestoreAlloc(AXFXAllocHook allocHook, AXFXFreeHook freeHook);
+ 
+-    static void* Alloc(u32 size);
++    static void* Alloc(size_t size);
+     static void Free(void* pBlock);
+ 
+     static AxfxImpl* mCurrentFx;
+diff --git a/include/nw4r/snd/snd_SoundArchivePlayer.h b/include/nw4r/snd/snd_SoundArchivePlayer.h
+index cedccbe..a966d20 100644
+--- a/include/nw4r/snd/snd_SoundArchivePlayer.h
++++ b/include/nw4r/snd/snd_SoundArchivePlayer.h
+@@ -102,10 +102,12 @@ public:
+                    u32 blockSize) {
+         return LoadGroup(static_cast<u32>(id), pAllocatable, blockSize);
+     }
++#ifndef FORECAST_PORT // u32 is unsigned int on the port: same overload
+     bool LoadGroup(unsigned int id, SoundMemoryAllocatable* pAllocatable,
+                    u32 blockSize) {
+         return LoadGroup(static_cast<u32>(id), pAllocatable, blockSize);
+     }
++#endif
+ 
+     u32 GetSoundPlayerCount() const {
+         return mSoundPlayerCount;
+diff --git a/include/nw4r/snd/snd_SoundStartable.h b/include/nw4r/snd/snd_SoundStartable.h
+index 4f7ef65..23eb614 100644
+--- a/include/nw4r/snd/snd_SoundStartable.h
++++ b/include/nw4r/snd/snd_SoundStartable.h
+@@ -65,10 +65,12 @@ public:
+         return detail_StartSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+     }
++#ifndef FORECAST_PORT // u32 is unsigned int on the port: same overload
+     bool StartSound(SoundHandle* pHandle, unsigned int id) {
+         return detail_StartSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+     }
++#endif
+     bool StartSound(SoundHandle* pHandle, int id) {
+         return detail_StartSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+@@ -77,9 +79,11 @@ public:
+     bool HoldSound(SoundHandle* pHandle, u32 id) {
+         return detail_HoldSound(pHandle, id, NULL, NULL, NULL) == START_SUCCESS;
+     }
++#ifndef FORECAST_PORT
+     bool HoldSound(SoundHandle* pHandle, unsigned int id) {
+         return detail_HoldSound(pHandle, id, NULL, NULL, NULL) == START_SUCCESS;
+     }
++#endif
+     bool HoldSound(SoundHandle* pHandle, int id) {
+         return detail_HoldSound(pHandle, id, NULL, NULL, NULL) == START_SUCCESS;
+     }
+@@ -88,10 +92,12 @@ public:
+         return detail_PrepareSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+     }
++#ifndef FORECAST_PORT
+     bool PrepareSound(SoundHandle* pHandle, unsigned int id) {
+         return detail_PrepareSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+     }
++#endif
+     bool PrepareSound(SoundHandle* pHandle, int id) {
+         return detail_PrepareSound(pHandle, id, NULL, NULL, NULL) ==
+                START_SUCCESS;
+diff --git a/include/nw4r/snd/snd_Types.h b/include/nw4r/snd/snd_Types.h
+index 8f3c67e..5d544e9 100644
+--- a/include/nw4r/snd/snd_Types.h
++++ b/include/nw4r/snd/snd_Types.h
+@@ -14,7 +14,12 @@ static const int REMOTE_FILTER_MAX = 127;
+ static const f32 VOLUME_MIN_DB = -90.4f;
+ static const f32 VOLUME_MAX_DB = 6.0f;
+ static const f32 VOLUME_RANGE_DB = -(VOLUME_MIN_DB - VOLUME_MAX_DB);
++#ifdef FORECAST_PORT
++// Clang does not fold float constants into integral constant expressions.
++static const int VOLUME_RANGE_MB = 964; // 10 * 96.4db
++#else
+ static const int VOLUME_RANGE_MB = static_cast<int>(10 * VOLUME_RANGE_DB);
++#endif
+ 
+ enum OutputLineFlag {
+     OUTPUT_LINE_MAIN = (1 << 0),
+diff --git a/include/nw4r/snd/snd_Util.h b/include/nw4r/snd/snd_Util.h
+index 6b537cf..b24ea56 100644
+--- a/include/nw4r/snd/snd_Util.h
++++ b/include/nw4r/snd/snd_Util.h
+@@ -14,10 +14,16 @@ public:
+     static const int SEMITONE_MAX = 12;
+     static const int MICROTONE_MAX = 256;
+ 
++#ifdef FORECAST_PORT
++    // GCC does not fold float constants into integral constant expressions.
++    static const int VOLUME_MIN = -904; // -90.4db
++    static const int VOLUME_MAX = 60;   // +6.0db
++#else
+     static const int VOLUME_MIN =
+         static_cast<int>(10 * VOLUME_MIN_DB); // -90.4db
+     static const int VOLUME_MAX =
+         static_cast<int>(10 * VOLUME_MAX_DB); // +6.0db
++#endif
+ 
+ public:
+     /******************************************************************************
+diff --git a/include/nw4r/ut/ut_CharStrmReader.h b/include/nw4r/ut/ut_CharStrmReader.h
+index a6da865..cea5ab0 100644
+--- a/include/nw4r/ut/ut_CharStrmReader.h
++++ b/include/nw4r/ut/ut_CharStrmReader.h
+@@ -41,7 +41,11 @@ private:
+     }
+ 
+     template <typename T> void StepStrm(int offset) {
++#ifdef FORECAST_PORT
++        mCharStrm = static_cast<const T*>(mCharStrm) + offset;
++#else
+         static_cast<const T*>(mCharStrm) += offset;
++#endif
+     }
+ 
+ private:
+diff --git a/include/nw4r/ut/ut_Color.h b/include/nw4r/ut/ut_Color.h
+index 7c598e8..48435d5 100644
+--- a/include/nw4r/ut/ut_Color.h
++++ b/include/nw4r/ut/ut_Color.h
+@@ -31,6 +31,23 @@ public:
+         a = alpha;
+     }
+ 
++#ifdef FORECAST_PORT
++    // u32 colors are 0xRRGGBBAA; memory stays r, g, b, a on a little-endian CPU.
++    Color& operator=(u32 color) {
++        r = color >> 24;
++        g = color >> 16;
++        b = color >> 8;
++        a = color;
++        return *this;
++    }
++    Color& operator=(const GXColor& rColor) {
++        r = rColor.r;
++        g = rColor.g;
++        b = rColor.b;
++        a = rColor.a;
++        return *this;
++    }
++#else
+     Color& operator=(u32 color) {
+         ToU32ref() = color;
+         return *this;
+@@ -39,6 +56,7 @@ public:
+         *this = *reinterpret_cast<const u32*>(&rColor);
+         return *this;
+     }
++#endif
+ 
+     Color operator|(u32 color) const {
+         return Color(ToU32() | color);
+@@ -54,6 +72,14 @@ public:
+         return *reinterpret_cast<const u32*>(this);
+     }
+ 
++#ifdef FORECAST_PORT
++    u32 ToU32() const {
++        return static_cast<u32>(r) << 24 | static_cast<u32>(g) << 16 | static_cast<u32>(b) << 8 | a;
++    }
++    operator u32() const {
++        return ToU32();
++    }
++#else
+     u32 ToU32() const {
+         return ToU32ref();
+     }
+@@ -61,6 +87,7 @@ public:
+     operator u32() const {
+         return ToU32ref();
+     }
++#endif
+ 
+     // clang-format off
+     static const u32 RED   = 0xFF0000FF;
+diff --git a/include/nw4r/ut/ut_Font.h b/include/nw4r/ut/ut_Font.h
+index 3b6ef46..1f73883 100644
+--- a/include/nw4r/ut/ut_Font.h
++++ b/include/nw4r/ut/ut_Font.h
+@@ -46,7 +46,9 @@ public:
+ 
+ public:
+     Font() : mReadFunc(&CharStrmReader::ReadNextCharCP1252) {}
+-#ifdef NW4R_UT_FONT_DTOR_OUT_OF_LINE
++// The port defines it once (COFF rejects an inline copy next to the
++// out-of-line one).
++#if defined(NW4R_UT_FONT_DTOR_OUT_OF_LINE) || defined(FORECAST_PORT)
+     virtual ~Font(); // at 0x8 (see ut_Font.cpp)
+ #else
+     virtual ~Font() {} // at 0x8
+diff --git a/include/nw4r/ut/ut_ResFontBase.h b/include/nw4r/ut/ut_ResFontBase.h
+index 019d74e..8492f81 100644
+--- a/include/nw4r/ut/ut_ResFontBase.h
++++ b/include/nw4r/ut/ut_ResFontBase.h
+@@ -25,13 +25,13 @@ struct FontTextureGlyph {
+     u16 sheetLine;   // at 0xE
+     u16 sheetWidth;  // at 0x10
+     u16 sheetHeight; // at 0x12
+-    u8* sheetImage;  // at 0x14
++    PTR32(u8) sheetImage; // at 0x14
+ };
+ 
+ struct FontWidth {
+     u16 indexBegin;          // at 0x0
+     u16 indexEnd;            // at 0x2
+-    FontWidth* pNext;        // at 0x4
++    PTR32(FontWidth) pNext;  // at 0x4
+     CharWidths widthTable[]; // at 0x8
+ };
+ 
+@@ -40,7 +40,7 @@ struct FontCodeMap {
+     u16 ccodeEnd;       // at 0x2
+     u16 mappingMethod;  // at 0x4
+     u16 reserved;       // at 0x6
+-    FontCodeMap* pNext; // at 0x8
++    PTR32(FontCodeMap) pNext; // at 0x8
+     u16 mapInfo[];      // at 0xC
+ };
+ 
+@@ -50,9 +50,9 @@ struct FontInformation {
+     u16 alterCharIndex;       // at 0x2
+     CharWidths defaultWidth;  // at 0x4
+     u8 encoding;              // at 0x7
+-    FontTextureGlyph* pGlyph; // at 0x8
+-    FontWidth* pWidth;        // at 0xC
+-    FontCodeMap* pMap;        // at 0x10
++    PTR32(FontTextureGlyph) pGlyph; // at 0x8
++    PTR32(FontWidth) pWidth;        // at 0xC
++    PTR32(FontCodeMap) pMap;        // at 0x10
+     u8 height;                // at 0x14
+     u8 width;                 // at 0x15
+     u8 ascent;                // at 0x16
+diff --git a/include/nw4r/ut/ut_algorithm.h b/include/nw4r/ut/ut_algorithm.h
+index 012cecc..455844a 100644
+--- a/include/nw4r/ut/ut_algorithm.h
++++ b/include/nw4r/ut/ut_algorithm.h
+@@ -29,6 +29,9 @@ template <typename T> inline T Abs(T x) {
+ }
+ 
+ template <> f32 inline Abs(register f32 x) {
++#ifdef FORECAST_PORT
++    return __builtin_fabsf(x);
++#else
+     register f32 ax;
+ 
+     ASM (
+@@ -36,6 +39,7 @@ template <> f32 inline Abs(register f32 x) {
+     )
+ 
+     return ax;
++#endif
+ }
+ 
+ /******************************************************************************
+@@ -57,9 +61,16 @@ template <typename T> inline bool TestBit(T t, int pos) {
+  * Pointer arithmetic
+  *
+  ******************************************************************************/
++#ifdef FORECAST_PORT
++// 64-bit hosts: full-width addresses. Every caller is pointer arithmetic below.
++inline uintptr_t GetIntPtr(const void* pPtr) {
++    return reinterpret_cast<uintptr_t>(pPtr);
++}
++#else
+ inline u32 GetIntPtr(const void* pPtr) {
+     return reinterpret_cast<u32>(pPtr);
+ }
++#endif
+ 
+ template <typename T>
+ inline const void* AddOffsetToPtr(const void* pBase, T offset) {
+@@ -74,7 +85,12 @@ inline s32 GetOffsetFromPtr(const void* pStart, const void* pEnd) {
+ }
+ 
+ inline int ComparePtr(const void* pPtr1, const void* pPtr2) {
++#ifdef FORECAST_PORT
++    // The difference of two 64-bit addresses does not fit an int.
++    return pPtr1 < pPtr2 ? -1 : (pPtr1 > pPtr2 ? 1 : 0);
++#else
+     return static_cast<int>(GetIntPtr(pPtr1) - GetIntPtr(pPtr2));
++#endif
+ }
+ 
+ /******************************************************************************
+@@ -83,22 +99,42 @@ inline int ComparePtr(const void* pPtr1, const void* pPtr2) {
+  *
+  ******************************************************************************/
+ template <typename T> inline T RoundUp(T t, unsigned int alignment) {
++#ifdef FORECAST_PORT
++    // The mask must be as wide as T (a 32-bit mask clears the top of a
++    // 64-bit address).
++    return (alignment + t - 1) & ~static_cast<T>(alignment - 1);
++#else
+     return (alignment + t - 1) & ~(alignment - 1);
++#endif
+ }
+ 
+ template <typename T> inline void* RoundUp(T* pPtr, unsigned int alignment) {
++#ifdef FORECAST_PORT
++    uintptr_t value = reinterpret_cast<uintptr_t>(pPtr);
++    uintptr_t rounded = (alignment + value - 1) & ~(uintptr_t)(alignment - 1);
++#else
+     u32 value = reinterpret_cast<u32>(pPtr);
+     u32 rounded = (alignment + value - 1) & ~(alignment - 1);
++#endif
+     return reinterpret_cast<void*>(rounded);
+ }
+ 
+ template <typename T> inline T RoundDown(T t, unsigned int alignment) {
++#ifdef FORECAST_PORT
++    return t & ~static_cast<T>(alignment - 1);
++#else
+     return t & ~(alignment - 1);
++#endif
+ }
+ 
+ template <typename T> inline void* RoundDown(T* pPtr, unsigned int alignment) {
++#ifdef FORECAST_PORT
++    uintptr_t value = reinterpret_cast<uintptr_t>(pPtr);
++    uintptr_t rounded = value & ~(uintptr_t)(alignment - 1);
++#else
+     u32 value = reinterpret_cast<u32>(pPtr);
+     u32 rounded = value & ~(alignment - 1);
++#endif
+     return reinterpret_cast<void*>(rounded);
+ }
+ 
+diff --git a/include/revolution/CX.h b/include/revolution/CX.h
+index 937a91e..cd2220a 100644
+--- a/include/revolution/CX.h
++++ b/include/revolution/CX.h
+@@ -61,6 +61,10 @@ BOOL CXiVerifyHuffmanTable_(const void* table, u8 bit);
+ 
+ // Compressed headers and output words are little-endian.
+ static inline u32 CXiConvertEndian_(u32 x) {
++#ifdef FORECAST_PORT
++    // Little-endian CPU: native loads and stores already match the format.
++    return x;
++#endif
+     return ((x & 0xFF000000) >> 24) | ((x & 0x00FF0000) >> 8) | ((x & 0x0000FF00) << 8) | ((x & 0x000000FF) << 24);
+ }
+ 
+diff --git a/include/revolution/GX/GXDisplayList.h b/include/revolution/GX/GXDisplayList.h
+index aa317c0..ed18670 100644
+--- a/include/revolution/GX/GXDisplayList.h
++++ b/include/revolution/GX/GXDisplayList.h
+@@ -12,9 +12,9 @@ u32 GXEndDisplayList(void);
+ void GXCallDisplayList(void* list, u32 size);
+ 
+ static inline void GXFastCallDisplayList(void* list, u32 size) {
+-    WGPIPE.c = GX_FIFO_CMD_CALL_DL;
+-    WGPIPE.p = list;
+-    WGPIPE.ui = size;
++    GX_WRITE(c, GX_FIFO_CMD_CALL_DL);
++    GX_WRITE(p, list);
++    GX_WRITE(ui, size);
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/include/revolution/GX/GXHardware.h b/include/revolution/GX/GXHardware.h
+index 51a5f90..4946f9e 100644
+--- a/include/revolution/GX/GXHardware.h
++++ b/include/revolution/GX/GXHardware.h
+@@ -45,6 +45,16 @@ extern volatile union {
+     float f;
+ } WGPIPE DECL_ADDRESS(0xCC008000);
+ 
++/**
++ * Write one value of the given WGPIPE member type to the FIFO
++ */
++#ifdef FORECAST_PORT
++// The port has no write-gather pipe: FIFO writes go to its command processor.
++#include <port_gx_pipe.h>
++#else
++#define GX_WRITE(member, value) (WGPIPE.member = (value))
++#endif
++
+ /**
+  * FIFO commands
+  */
+@@ -88,8 +98,8 @@ typedef enum {
+         __GX_FIFO_SET_LOAD_INDX_DST(cmd, dst);                                 \
+         __GX_FIFO_SET_LOAD_INDX_NELEM(cmd, nelem);                             \
+         __GX_FIFO_SET_LOAD_INDX_INDEX(cmd, index);                             \
+-        WGPIPE.c = reg;                                                        \
+-        WGPIPE.i = cmd;                                                        \
++        GX_WRITE(c, reg);                                                        \
++        GX_WRITE(i, cmd);                                                        \
+     }
+ 
+ #define GX_FIFO_LOAD_INDX_A(dst, nelem, index)                                 \
+@@ -116,8 +126,8 @@ typedef enum {
+  * Load immediate value into BP register
+  */
+ #define GX_BP_LOAD_REG(data)                                                   \
+-    WGPIPE.c = GX_FIFO_CMD_LOAD_BP_REG;                                        \
+-    WGPIPE.i = (data);
++    GX_WRITE(c, GX_FIFO_CMD_LOAD_BP_REG);                                        \
++    GX_WRITE(i, (data));
+ 
+ /**
+  * Set BP command opcode (first 8 bits)
+@@ -139,9 +149,9 @@ typedef enum {
+  * Load immediate value into CP register
+  */
+ #define GX_CP_LOAD_REG(addr, data)                                             \
+-    WGPIPE.c = GX_FIFO_CMD_LOAD_CP_REG;                                        \
+-    WGPIPE.c = (addr);                                                         \
+-    WGPIPE.i = (data);
++    GX_WRITE(c, GX_FIFO_CMD_LOAD_CP_REG);                                        \
++    GX_WRITE(c, (addr));                                                         \
++    GX_WRITE(i, (data));
+ 
+ #define GX_CP_CMD_SZ (sizeof(u8) + sizeof(u8) + sizeof(u32))
+ 
+@@ -167,15 +177,15 @@ typedef enum {
+  * Header for an XF register load
+  */
+ #define GX_XF_LOAD_REG_HDR(addr)                                               \
+-    WGPIPE.c = GX_FIFO_CMD_LOAD_XF_REG;                                        \
+-    WGPIPE.i = (addr);
++    GX_WRITE(c, GX_FIFO_CMD_LOAD_XF_REG);                                        \
++    GX_WRITE(i, (addr));
+ 
+ /**
+  * Load immediate value into XF register
+  */
+ #define GX_XF_LOAD_REG(addr, data)                                             \
+     GX_XF_LOAD_REG_HDR(addr);                                                  \
+-    WGPIPE.i = (data);
++    GX_WRITE(i, (data));
+ 
+ #define GX_XF_CMD_SZ (sizeof(u8) + sizeof(u32) + sizeof(u32))
+ 
+diff --git a/include/revolution/GX/GXInternal.h b/include/revolution/GX/GXInternal.h
+index 9d45778..847f88f 100644
+--- a/include/revolution/GX/GXInternal.h
++++ b/include/revolution/GX/GXInternal.h
+@@ -64,7 +64,11 @@ typedef struct _GXTexObjImpl {
+     u32 mode1;       // at 0x4
+     u32 image0;      // at 0x8
+     u32 image3;      // at 0xC
++#ifdef FORECAST_PORT
++    u32 userData; // at 0x10 (GX address: GXTexObj stays 32 bytes on 64-bit)
++#else
+     void* userData;  // at 0x10
++#endif
+     GXTexFmt format; // at 0x14
+     u32 tlutName;    // at 0x18
+     u16 loadCount;   // at 0x1C
+diff --git a/include/revolution/GX/GXTypes.h b/include/revolution/GX/GXTypes.h
+index c7dd607..8fc5d30 100644
+--- a/include/revolution/GX/GXTypes.h
++++ b/include/revolution/GX/GXTypes.h
+@@ -75,6 +75,20 @@ typedef struct _GXColorS10 {
+     s16 r, g, b, a;
+ } GXColorS10;
+ 
++/**
++ * A GXColor as one register-ordered word (R in the top byte), and two
++ * adjacent s16 components as one word (the first in the top half)
++ */
++#ifdef FORECAST_PORT
++#define GX_COLOR_AS_U32(c)                                                     \
++    ((u32)(c).r << 24 | (u32)(c).g << 16 | (u32)(c).b << 8 | (u32)(c).a)
++#define GX_S16_PAIR_AS_U32(p)                                                  \
++    ((u32)(u16)(p)[0] << 16 | (u32)(u16)(p)[1])
++#else
++#define GX_COLOR_AS_U32(c) (*(u32*)&(c))
++#define GX_S16_PAIR_AS_U32(p) (*(u32*)(p))
++#endif
++
+ /**
+  * Common enums
+  */
+diff --git a/include/revolution/GX/GXVert.h b/include/revolution/GX/GXVert.h
+index 3f7f15a..c4f706c 100644
+--- a/include/revolution/GX/GXVert.h
++++ b/include/revolution/GX/GXVert.h
+@@ -8,198 +8,198 @@ extern "C" {
+ #endif
+ 
+ static inline void GXCmd1u8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ static inline void GXCmd1u16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXCmd1u32(u32 ul) {
+-    WGPIPE.ui = ul;
++    GX_WRITE(ui, ul);
+ }
+ 
+ static inline void GXPosition3f32(f32 x, f32 y, f32 z) {
+-    WGPIPE.f = x;
+-    WGPIPE.f = y;
+-    WGPIPE.f = z;
++    GX_WRITE(f, x);
++    GX_WRITE(f, y);
++    GX_WRITE(f, z);
+ }
+ 
+ static inline void GXPosition3u8(u8 x, u8 y, u8 z) {
+-    WGPIPE.uc = x;
+-    WGPIPE.uc = y;
+-    WGPIPE.uc = z;
++    GX_WRITE(uc, x);
++    GX_WRITE(uc, y);
++    GX_WRITE(uc, z);
+ }
+ 
+ static inline void GXPosition3s8(s8 x, s8 y, s8 z) {
+-    WGPIPE.c = x;
+-    WGPIPE.c = y;
+-    WGPIPE.c = z;
++    GX_WRITE(c, x);
++    GX_WRITE(c, y);
++    GX_WRITE(c, z);
+ }
+ 
+ static inline void GXPosition3u16(u16 x, u16 y, u16 z) {
+-    WGPIPE.us = x;
+-    WGPIPE.us = y;
+-    WGPIPE.us = z;
++    GX_WRITE(us, x);
++    GX_WRITE(us, y);
++    GX_WRITE(us, z);
+ }
+ 
+ static inline void GXPosition3s16(s16 x, s16 y, s16 z) {
+-    WGPIPE.s = x;
+-    WGPIPE.s = y;
+-    WGPIPE.s = z;
++    GX_WRITE(s, x);
++    GX_WRITE(s, y);
++    GX_WRITE(s, z);
+ }
+ 
+ static inline void GXPosition2f32(f32 x, f32 y) {
+-    WGPIPE.f = x;
+-    WGPIPE.f = y;
++    GX_WRITE(f, x);
++    GX_WRITE(f, y);
+ }
+ 
+ static inline void GXPosition2u8(u8 x, u8 y) {
+-    WGPIPE.uc = x;
+-    WGPIPE.uc = y;
++    GX_WRITE(uc, x);
++    GX_WRITE(uc, y);
+ }
+ 
+ static inline void GXPosition2s8(s8 x, s8 y) {
+-    WGPIPE.c = x;
+-    WGPIPE.c = y;
++    GX_WRITE(c, x);
++    GX_WRITE(c, y);
+ }
+ 
+ static inline void GXPosition2u16(u16 x, u16 y) {
+-    WGPIPE.us = x;
+-    WGPIPE.us = y;
++    GX_WRITE(us, x);
++    GX_WRITE(us, y);
+ }
+ 
+ static inline void GXPosition2s16(s16 x, s16 y) {
+-    WGPIPE.s = x;
+-    WGPIPE.s = y;
++    GX_WRITE(s, x);
++    GX_WRITE(s, y);
+ }
+ 
+ static inline void GXPosition1x16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXPosition1x8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ static inline void GXNormal3f32(f32 x, f32 y, f32 z) {
+-    WGPIPE.f = x;
+-    WGPIPE.f = y;
+-    WGPIPE.f = z;
++    GX_WRITE(f, x);
++    GX_WRITE(f, y);
++    GX_WRITE(f, z);
+ }
+ 
+ static inline void GXNormal3u16(s16 x, s16 y, s16 z) {
+-    WGPIPE.us = x;
+-    WGPIPE.us = y;
+-    WGPIPE.us = z;
++    GX_WRITE(us, x);
++    GX_WRITE(us, y);
++    GX_WRITE(us, z);
+ }
+ 
+ static inline void GXNormal3s16(s16 x, s16 y, s16 z) {
+-    WGPIPE.s = x;
+-    WGPIPE.s = y;
+-    WGPIPE.s = z;
++    GX_WRITE(s, x);
++    GX_WRITE(s, y);
++    GX_WRITE(s, z);
+ }
+ 
+ static inline void GXNormal3u8(u8 x, u8 y, u8 z) {
+-    WGPIPE.uc = x;
+-    WGPIPE.uc = y;
+-    WGPIPE.uc = z;
++    GX_WRITE(uc, x);
++    GX_WRITE(uc, y);
++    GX_WRITE(uc, z);
+ }
+ 
+ static inline void GXNormal3s8(s8 x, s8 y, s8 z) {
+-    WGPIPE.c = x;
+-    WGPIPE.c = y;
+-    WGPIPE.c = z;
++    GX_WRITE(c, x);
++    GX_WRITE(c, y);
++    GX_WRITE(c, z);
+ }
+ 
+ static inline void GXNormal1x16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXNormal1x8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ static inline void GXColor4u8(u8 r, u8 g, u8 b, u8 a) {
+-    WGPIPE.uc = r;
+-    WGPIPE.uc = g;
+-    WGPIPE.uc = b;
+-    WGPIPE.uc = a;
++    GX_WRITE(uc, r);
++    GX_WRITE(uc, g);
++    GX_WRITE(uc, b);
++    GX_WRITE(uc, a);
+ }
+ 
+ static inline void GXColor1u32(u32 color) {
+-    WGPIPE.ui = color;
++    GX_WRITE(ui, color);
+ }
+ 
+ static inline void GXColor3u8(u8 r, u8 g, u8 b) {
+-    WGPIPE.uc = r;
+-    WGPIPE.uc = g;
+-    WGPIPE.uc = b;
++    GX_WRITE(uc, r);
++    GX_WRITE(uc, g);
++    GX_WRITE(uc, b);
+ }
+ 
+ static inline void GXColor1u16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXColor1x16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXColor1x8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ static inline void GXTexCoord2f32(f32 x, f32 y) {
+-    WGPIPE.f = x;
+-    WGPIPE.f = y;
++    GX_WRITE(f, x);
++    GX_WRITE(f, y);
+ }
+ 
+ static inline void GXTexCoord2s16(s16 x, s16 y) {
+-    WGPIPE.s = x;
+-    WGPIPE.s = y;
++    GX_WRITE(s, x);
++    GX_WRITE(s, y);
+ }
+ 
+ static inline void GXTexCoord2u16(u16 x, u16 y) {
+-    WGPIPE.us = x;
+-    WGPIPE.us = y;
++    GX_WRITE(us, x);
++    GX_WRITE(us, y);
+ }
+ 
+ static inline void GXTexCoord2s8(s8 x, s8 y) {
+-    WGPIPE.c = x;
+-    WGPIPE.c = y;
++    GX_WRITE(c, x);
++    GX_WRITE(c, y);
+ }
+ 
+ static inline void GXTexCoord2u8(u8 x, u8 y) {
+-    WGPIPE.uc = x;
+-    WGPIPE.uc = y;
++    GX_WRITE(uc, x);
++    GX_WRITE(uc, y);
+ }
+ 
+ static inline void GXTexCoord1f32(f32 f) {
+-    WGPIPE.f = f;
++    GX_WRITE(f, f);
+ }
+ 
+ static inline void GXTexCoord1s16(s16 s) {
+-    WGPIPE.s = s;
++    GX_WRITE(s, s);
+ }
+ 
+ static inline void GXTexCoord1u16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXTexCoord1s8(s8 c) {
+-    WGPIPE.c = c;
++    GX_WRITE(c, c);
+ }
+ 
+ static inline void GXTexCoord1u8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ static inline void GXTexCoord1x16(u16 us) {
+-    WGPIPE.us = us;
++    GX_WRITE(us, us);
+ }
+ 
+ static inline void GXTexCoord1x8(u8 uc) {
+-    WGPIPE.uc = uc;
++    GX_WRITE(uc, uc);
+ }
+ 
+ #ifdef __cplusplus
+diff --git a/include/revolution/OS/OSAddress.h b/include/revolution/OS/OSAddress.h
+index 2bff88e..8d4d498 100644
+--- a/include/revolution/OS/OSAddress.h
++++ b/include/revolution/OS/OSAddress.h
+@@ -5,6 +5,28 @@
+ extern "C" {
+ #endif
+ 
++#ifdef FORECAST_PORT
++// Physical addresses are the port's 32-bit GX addresses (port_mem.h). The
++// "physical" pointers returned here are those addresses widened, not memory;
++// they are only ever converted back to u32 for the GPU.
++#include <port_mem.h>
++
++static inline void* OSPhysicalToCached(u32 ofs) {
++    return (void*)port_gx_ptr(ofs);
++}
++
++static inline void* OSPhysicalToUncached(u32 ofs) {
++    return (void*)port_gx_ptr(ofs);
++}
++
++static inline void* OSCachedToPhysical(const void* ofs) {
++    return (void*)(uintptr_t)port_gx_addr(ofs);
++}
++
++static inline void* OSUncachedToPhysical(const void* ofs) {
++    return (void*)(uintptr_t)port_gx_addr(ofs);
++}
++#else
+ static inline void* OSPhysicalToCached(u32 ofs) {
+     return (void*)(ofs + 0x80000000);
+ }
+@@ -20,6 +42,7 @@ static inline void* OSCachedToPhysical(const void* ofs) {
+ static inline void* OSUncachedToPhysical(const void* ofs) {
+     return (u8*)ofs - 0xC0000000;
+ }
++#endif
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/include/revolution/TPL/TPL.h b/include/revolution/TPL/TPL.h
+index 8714c93..aaaee72 100644
+--- a/include/revolution/TPL/TPL.h
++++ b/include/revolution/TPL/TPL.h
+@@ -11,7 +11,7 @@ typedef struct TPLHeader {
+     u16 height;            // at 0x0
+     u16 width;             // at 0x2
+     u32 format;            // at 0x4
+-    char* data;            // at 0x8
++    PTR32(char) data;      // at 0x8
+     GXTexWrapMode wrapS;   // at 0xC
+     GXTexWrapMode wrapT;   // at 0x10
+     GXTexFilter minFilter; // at 0x14
+@@ -28,18 +28,18 @@ typedef struct TPLClutHeader {
+     u8 unpacked;      // at 0x1
+     u8 pad8;          // at 0x2
+     GXTlutFmt format; // at 0x4
+-    char* data;       // at 0x8
++    PTR32(char) data; // at 0x8
+ } TPLClutHeader;
+ 
+ typedef struct TPLDescriptor {
+-    TPLHeader* textureHeader;  // at 0x0
+-    TPLClutHeader* CLUTHeader; // at 0x4
++    PTR32(TPLHeader) textureHeader;  // at 0x0
++    PTR32(TPLClutHeader) CLUTHeader; // at 0x4
+ } TPLDescriptor;
+ 
+ typedef struct TPLPalette {
+     u32 versionNumber;              // at 0x0
+     u32 numDescriptors;             // at 0x4
+-    TPLDescriptor* descriptorArray; // at 0x8
++    PTR32(TPLDescriptor) descriptorArray; // at 0x8
+ } TPLPalette;
+ 
+ void TPLBind(TPLPalette* pal);
+diff --git a/src/Connect.cpp b/src/Connect.cpp
+index 8f14596..80fa18e 100644
+--- a/src/Connect.cpp
++++ b/src/Connect.cpp
+@@ -430,12 +430,12 @@ void Connect::DrawProgress() {
+         SetProgressColor(alpha);
+ 
+         u32 icon = sProgressIcons[gRegion != 0][i];
+-        f32 y = 280.0f - 0.5f * (0.6f * GetTexHeight((TPLPalette*)gUnk80330B74, icon));
++        f32 y = 280.0f - 0.5f * (0.6f * GetTexHeight(U32_TO_PTR(TPLPalette*, gUnk80330B74), icon));
+         Vec pos;
+-        pos.x = x - 0.5f * (0.6f * GetTexWidth((TPLPalette*)gUnk80330B74, icon));
++        pos.x = x - 0.5f * (0.6f * GetTexWidth(U32_TO_PTR(TPLPalette*, gUnk80330B74), icon));
+         pos.y = y;
+         pos.z = 0.0f;
+-        DrawTextureAt((TPLPalette*)gUnk80330B74, icon, 0.6f, 0.6f, &pos);
++        DrawTextureAt(U32_TO_PTR(TPLPalette*, gUnk80330B74), icon, 0.6f, 0.6f, &pos);
+         x += 40.0f;
+     }
+ }
+diff --git a/src/ForecastCheck.cpp b/src/ForecastCheck.cpp
+index c1b8c71..5846eee 100644
+--- a/src/ForecastCheck.cpp
++++ b/src/ForecastCheck.cpp
+@@ -14,10 +14,10 @@ void MinutesToCalendarTime(u32 minutes, OSCalendarTime* time);
+ #define GET_TABLE(dst, type, base, offset, err)                                                              \
+     {                                                                                                        \
+         type* p = (type*)((u8*)(base) + (offset));                                                           \
+-        if (((u32)p & 3) == 0) {                                                                             \
++        if ((PTR_ADDR(p) & 3) == 0) {                                                                             \
+             dst = p;                                                                                         \
+         }                                                                                                    \
+-        if ((s32)p & 3) {                                                                                   \
++        if ((s32)PTR_ADDR(p) & 3) {                                                                                   \
+             err = -1;                                                                                        \
+         }                                                                                                    \
+     }
+@@ -50,7 +50,7 @@ BOOL CheckForecastData(void* forecast, u32 forecastSize, s32* forecastResult, vo
+     OSCalendarTime time;
+ 
+     if (forecast != NULL) {
+-        if (((u32)forecast & 3) == 0) {
++        if ((PTR_ADDR(forecast) & 3) == 0) {
+             header = (ForecastHeader*)forecast;
+         } else {
+             *forecastResult = -1;
+@@ -59,10 +59,10 @@ BOOL CheckForecastData(void* forecast, u32 forecastSize, s32* forecastResult, vo
+         }
+ 
+         forecasts = (ForecastEntry*)((u8*)header + header->mForecastOffset);
+-        if (((u32)forecasts & 3) == 0) {
++        if ((PTR_ADDR(forecasts) & 3) == 0) {
+             forecasts = (ForecastEntry*)((u8*)header + header->mForecastOffset);
+         }
+-        if ((s32)forecasts & 3) {
++        if ((s32)PTR_ADDR(forecasts) & 3) {
+             err = -1;
+         }
+         GET_TABLE(summaries, SummaryEntry, header, header->mSummaryOffset, err);
+@@ -71,7 +71,7 @@ BOOL CheckForecastData(void* forecast, u32 forecastSize, s32* forecastResult, vo
+         GET_TABLE(laundryIndices, IndexText, header, header->mLaundryIndexOffset, err);
+         GET_TABLE(pollenIndices, IndexText, header, header->mPollenIndexOffset, err);
+         PlaceEntry* p = (PlaceEntry*)((u8*)header + header->mPlaceOffset);
+-        if (((u32)p & 3) == 0) {
++        if ((PTR_ADDR(p) & 3) == 0) {
+             places = p;
+         } else {
+             err = -1;
+@@ -81,7 +81,7 @@ BOOL CheckForecastData(void* forecast, u32 forecastSize, s32* forecastResult, vo
+     }
+ 
+     if (shortData != NULL) {
+-        if (((u32)shortData & 3) == 0) {
++        if ((PTR_ADDR(shortData) & 3) == 0) {
+             shortHeader = (ShortHeader*)shortData;
+         } else {
+             *forecastResult = err;
+diff --git a/src/ForecastData.cpp b/src/ForecastData.cpp
+index a680f42..2706b41 100644
+--- a/src/ForecastData.cpp
++++ b/src/ForecastData.cpp
+@@ -404,7 +404,7 @@ void CityForecast::Setup(void* base, ForecastEntry* entry) {
+     MinutesToCalendarTime(mMinutes, &mTime);
+ }
+ 
+-#define WEATHER_TPL ((TPLPalette*)gUnk80330B74)
++#define WEATHER_TPL (U32_TO_PTR(TPLPalette*, gUnk80330B74))
+ 
+ // One texture of a weather icon
+ struct IconLayer {
+diff --git a/src/LayoutObj.cpp b/src/LayoutObj.cpp
+index 7e3093c..3f1c273 100644
+--- a/src/LayoutObj.cpp
++++ b/src/LayoutObj.cpp
+@@ -857,7 +857,13 @@ void LayoutObj::Calc() {
+         mFadeFrame--;
+     }
+ 
++#ifdef FORECAST_PORT
++    // mFadeFrames can be 0: PowerPC's divw does not trap (and arm64 gives 0),
++    // x86 does.
++    s32 alpha = mFadeFrames != 0 ? 255 - mFadeFrame * 255 / mFadeFrames : 255;
++#else
+     s32 alpha = 255 - mFadeFrame * 255 / mFadeFrames;
++#endif
+     ApplyAlpha(alpha);
+ }
+ 
+diff --git a/src/Scene.cpp b/src/Scene.cpp
+index a3424f2..35c99ad 100644
+--- a/src/Scene.cpp
++++ b/src/Scene.cpp
+@@ -56,6 +56,11 @@ public:
+     u8 unk4[0x4C - 0x4]; // at 0x4
+ };
+ 
++#ifdef FORECAST_PORT
++MemoryManager* PortNewEfMemoryManager(void* pStartAddr, u32 size, int maxEffect, int maxEmitter,
++                                      int maxParticleManager, int maxParticle);
++#endif
++
+ // Cursor type -> effect style (normal, hold, open); type 5 draws a plain texture instead
+ static const s32 sCursorStyle[] = {0, 0, 1, 2, 2, -1};
+ // Starting spin counter per controller
+@@ -90,17 +95,36 @@ Cursor::Cursor() {
+     u32 texSize;
+ 
+     mEffectReady = FALSE;
++#ifdef FORECAST_PORT
++    // The class above is an opaque stand-in sized for the Wii; the real one is
++    // larger on 64-bit hosts, so it is constructed where it is defined
++    // (ef_memorymanager.cpp). Its objects are larger too: twice the heap.
++    mEffectHeap = MEM2Alloc(0x40000, 32);
++    mEffectMemory = PortNewEfMemoryManager(mEffectHeap, 0x40000, 32, 64, 64, 64);
++#else
+     mEffectHeap = MEM2Alloc(0x20000, 32);
+     mEffectMemory = new MemoryManager(mEffectHeap, 0x20000, 32, 64, 64, 64);
++#endif
+     nw4r::ef::EffectSystem::GetInstance()->SetMemoryManager(mEffectMemory, 1);
+ 
+     mEffectData = NULL;
+     mEffectTexData = NULL;
+     resource = nw4r::ef::Resource::GetInstance();
++#ifdef FORECAST_PORT
++    // The cursor effect files are still big-endian and ef's loader relocates
++    // them into 32-bit slots (notes/64bit-audit.md, ef): skipped until both are
++    // ported (milestone 5). The cursor is drawn without its sparkle.
++    OSReport("port: cursor effect (breff/breft) not loaded yet\n");
++    (void)texSize;
++    // SystemInit starts the fatal-error scene when this is FALSE.
++    mEffectReady = TRUE;
++    if (FALSE) {
++#else
+     mEffectData = LoadCompressedContentFile(gUnk80330B64, "nw4r_defcursor_all01.breff.LZ", 32, NULL, gMEM2Heap);
+     mEffectTexData = LoadCompressedContentFile(gUnk80330B64, "nw4r_defcursor_all01.breft.LZ", 32, &texSize, gMEM2Heap);
+ 
+     if (mEffectData != NULL && mEffectTexData != NULL) {
++#endif
+         mEffectReady = TRUE;
+         resource->Add((u8*)mEffectData);
+         resource->AddTexture((u8*)mEffectTexData);
+diff --git a/src/SceneBase.cpp b/src/SceneBase.cpp
+index c8a3452..8161592 100644
+--- a/src/SceneBase.cpp
++++ b/src/SceneBase.cpp
+@@ -108,7 +108,14 @@ SimpleModel* gEarthModel;
+ static u32 sEarthFileSize;
+ static u32 sEarthUncompSize;
+ static u32 sEarthChunkSize;
++#ifdef FORECAST_PORT
++// Other units declare it extern "C"; Windows decorates C++ variable names.
++extern "C" {
+ TPLPalette* gCommonTpl;
++}
++#else
++TPLPalette* gCommonTpl;
++#endif
+ static void* sSceneMem1;
+ static void* sSceneMem2;
+ static MEMiHeapHead* sSceneHeap1;
+@@ -943,11 +950,17 @@ BOOL SceneBase::StateReturnToMenu() {
+ BOOL SceneBase::StateFatal() {
+     switch (mStatePhase) {
+     case 0:
++#ifdef FORECAST_PORT
++    {
++#endif
+         mStatePhase++;
+         GXColor clear = {0, 0, 0, 0};
+         GXSetCopyClear(clear, 0xFFFFFF);
+         StartFade(FADE_CAPTURE_BRIGHTNESS, 20, FADE_NONE, 0);
+         break;
++#ifdef FORECAST_PORT
++    }
++#endif
+     case -1:
+         break;
+     default:
+diff --git a/src/Sound.cpp b/src/Sound.cpp
+index 2e98f66..d4563c2 100644
+--- a/src/Sound.cpp
++++ b/src/Sound.cpp
+@@ -8,7 +8,14 @@
+ #include <revolution/SC/scapi.h>
+ 
+ Sound::Sound(const char* path, void* heap) {
++#ifdef FORECAST_PORT
++    // The sound archive (brsar) is still big-endian and AX is not ported:
++    // sound stays off (milestone 5). SoundManager's entry points check this.
++    OSReport("port: sound archive %s not loaded yet (sound off)\n", path);
++    mData = NULL;
++#else
+     mData = LoadContentFile(gUnk80330B64, path, 32, NULL, gMEM2Heap);
++#endif
+     mHeap = heap;
+ 
+     if (mData != NULL) {
+diff --git a/src/SoundManager.cpp b/src/SoundManager.cpp
+index 612909c..4cc4877 100644
+--- a/src/SoundManager.cpp
++++ b/src/SoundManager.cpp
+@@ -374,6 +374,11 @@ void ExitSoundManager() {
+ }
+ 
+ void UpdateSoundManager() {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     sVolumeRamps[0].Update();
+     sVolumeRamps[1].Update();
+     sVolumeRamps[2].Update();
+@@ -386,6 +391,11 @@ void UpdateSoundManager() {
+ }
+ 
+ void SetSoundManagerOutputMode(u8 scMode) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     sOutputMode = scMode;
+     ApplyOutputMode(scMode);
+ }
+@@ -512,6 +522,11 @@ static inline void SetVolumeAndMute(snd::SoundHandle* handle, f32 volume) {
+ }
+ 
+ void PlaySE(s32 id) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     snd::SoundHandle* handle = sEffectHandle;
+     StartWatched(handle, id);
+     SetVolumeAndMute(handle, 1.0f);
+@@ -520,6 +535,11 @@ void PlaySE(s32 id) {
+ }
+ 
+ void PlayLoopSE(s32 id, f32 volume, f32 pitch, f32 pan, f32 unused) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     snd::SoundHandle* handle = sEffectHandle;
+     StartWatched(handle, id);
+     SetVolumeAndMute(handle, volume);
+@@ -528,34 +548,74 @@ void PlayLoopSE(s32 id, f32 volume, f32 pitch, f32 pan, f32 unused) {
+ }
+ 
+ void StartSound(snd::SoundHandle* handle, u32 id) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     StartWatched(handle, id);
+ }
+ 
+ void StopSound(snd::SoundHandle* handle, s32 fadeFrames) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     handle->Stop(fadeFrames);
+ }
+ 
+ void PauseSound(snd::SoundHandle* handle, bool pause, s32 fadeFrames) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     handle->Pause(pause, fadeFrames);
+ }
+ 
+ bool IsSoundPaused(snd::SoundHandle* handle) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return false;
++    }
++#endif
+     return handle->IsAttachedSound() && handle->detail_GetAttachedSound()->IsPause();
+ }
+ 
+ void SetSoundVolume(snd::SoundHandle* handle, f32 volume) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     SetVolumeAndMute(handle, volume);
+ }
+ 
+ void SetSoundPitch(snd::SoundHandle* handle, f32 pitch) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     handle->SetPitch(pitch);
+ }
+ 
+ void SetSoundPan(snd::SoundHandle* handle, f32 pan) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return;
++    }
++#endif
+     handle->SetPan(pan);
+ }
+ 
+ bool IsSoundPlaying(snd::SoundHandle* handle) {
++#ifdef FORECAST_PORT
++    if (!sReady) { // sound is off on the port until the archive is converted
++        return false;
++    }
++#endif
+     return handle->IsAttachedSound();
+ }
+ 
+diff --git a/src/System.cpp b/src/System.cpp
+index 8a3b2b2..bcce3d0 100644
+--- a/src/System.cpp
++++ b/src/System.cpp
+@@ -62,9 +62,9 @@ void SystemInit(void) {
+ 
+     {
+         void* arenaHi = OSGetMEM1ArenaHi();
+-        void* heapStart = OSAllocFromMEM1ArenaHi((u32)OSGetMEM1ArenaHi() - (u32)OSGetMEM1ArenaLo(), 32);
++        void* heapStart = OSAllocFromMEM1ArenaHi(PTR_ADDR(OSGetMEM1ArenaHi()) - PTR_ADDR(OSGetMEM1ArenaLo()), 32);
+ 
+-        gMEM1Heap = MEMCreateExpHeapEx(heapStart, (u32)arenaHi - (u32)heapStart, 3);
++        gMEM1Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3);
+     }
+     MEMInitAllocatorForExpHeap(&gMEM1Allocator, gMEM1Heap, 4);
+     MEMInitAllocatorForExpHeap(&gMEM1Allocator32, gMEM1Heap, 32);
+@@ -72,9 +72,9 @@ void SystemInit(void) {
+ 
+     {
+         void* arenaHi = OSGetMEM2ArenaHi();
+-        void* heapStart = OSAllocFromMEM2ArenaHi((u32)OSGetMEM2ArenaHi() - (u32)OSGetMEM2ArenaLo(), 32);
++        void* heapStart = OSAllocFromMEM2ArenaHi(PTR_ADDR(OSGetMEM2ArenaHi()) - PTR_ADDR(OSGetMEM2ArenaLo()), 32);
+ 
+-        gMEM2Heap = MEMCreateExpHeapEx(heapStart, (u32)arenaHi - (u32)heapStart, 3);
++        gMEM2Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3);
+     }
+     MEMInitAllocatorForExpHeap(&gMEM2Allocator, gMEM2Heap, 4);
+     MEMInitAllocatorForExpHeap(&gMEM2Allocator32, gMEM2Heap, 32);
+@@ -701,9 +701,18 @@ void ChangeScene(u32 scene) {
+         leaked = TRUE;
+     }
+ 
++#ifdef FORECAST_PORT
++    // Host C++ (the C++ library, the port's GX layer) also allocates from MEM1
++    // through operator new, so the free size is not the channel's alone.
++    if (scene != SCENE_FATAL && leaked) {
++        OSReport("port: heap free size changed across scenes (MEM1 %u, MEM2 %u)\n",
++                 MEMGetTotalFreeSizeForExpHeap(gMEM1Heap), MEMGetTotalFreeSizeForExpHeap(gMEM2Heap));
++    }
++#else
+     if (scene != SCENE_FATAL && leaked) {
+         OSPanic("System.cpp", 1325, "!!! MEMORY LEAK FOUND !!!\n");
+     }
++#endif
+ 
+     gScene = scene;
+     gMEM1FreeSize = MEMGetTotalFreeSizeForExpHeap(gMEM1Heap);
+@@ -1242,6 +1251,53 @@ void MEM2Free(void* block) {
+     MEMFreeToExpHeap(gMEM2Heap, block);
+ }
+ 
++#ifdef FORECAST_PORT
++// On the host these also serve the C++ library and the port's own code,
++// including static initialisers that run before SystemInit creates the heap:
++// until then, and for blocks not from the heap, the C heap is used. 64-bit
++// objects need 8-byte alignment (16 for SIMD), not the Wii's 4.
++#include <stdlib.h>
++
++#include <port_mem.h>
++
++static void* PortNew(size_t size, s32 align) {
++    if (gMEM1Heap == NULL) {
++        return malloc(size != 0 ? size : 1);
++    }
++    return MEMAllocFromExpHeapEx(gMEM1Heap, size, align < 16 ? 16 : align);
++}
++
++static void PortDelete(void* block) {
++    if (block == NULL) {
++        return;
++    }
++    if ((u8*)block >= port_arena_base && (u8*)block < port_arena_base + PORT_ARENA_SIZE) {
++        MEMFreeToExpHeap(gMEM1Heap, block);
++    } else {
++        free(block);
++    }
++}
++
++void* operator new(size_t size) {
++    return PortNew(size, 16);
++}
++
++void* operator new(size_t size, s32 align) {
++    return PortNew(size, align);
++}
++
++void* operator new[](size_t size) {
++    return PortNew(size, 16);
++}
++
++void operator delete(void* block) {
++    PortDelete(block);
++}
++
++void operator delete[](void* block) {
++    PortDelete(block);
++}
++#else
+ void* operator new(size_t size) {
+     return MEMAllocFromExpHeapEx(gMEM1Heap, size, 4);
+ }
+@@ -1261,6 +1317,7 @@ void operator delete(void* block) {
+ void operator delete[](void* block) {
+     MEMFreeToExpHeap(gMEM1Heap, block);
+ }
++#endif
+ 
+ MEMiHeapHead* gMEM1Heap;
+ u32 gMEM1FreeSize;
+diff --git a/src/WeatherAddress.cpp b/src/WeatherAddress.cpp
+index 1ce7d42..12f74e4 100644
+--- a/src/WeatherAddress.cpp
++++ b/src/WeatherAddress.cpp
+@@ -740,7 +740,7 @@ BOOL WeatherAddress::UpdateCityList() {
+     for (AddressEntry* entry = mListHead; entry != NULL; entry = entry->mNext) {
+         if (HitTest(entry) >= 0) {
+             if (entry->mPlace != NULL) {
+-                CHANGE_STATE(&WeatherAddress::StateConfirm, (s32)entry);
++                CHANGE_STATE(&WeatherAddress::StateConfirm, (s32)PTR_TO_U32(entry));
+                 PlaySE(36);
+             } else {
+                 CHANGE_STATE(&WeatherAddress::StateArea, 0);
+@@ -887,7 +887,7 @@ void WeatherAddress::StateConfirm(s32 arg) {
+         mPhase++;
+         mActiveLayout = mConfirmLayout;
+         mDrawFunc = &WeatherAddress::DrawConfirm;
+-        mSelected = (AddressEntry*)arg;
++        mSelected = U32_TO_PTR(AddressEntry*, arg);
+         if (mSelected == NULL) {
+             mSelected = mEntries;
+         }
+diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
+index 661a8c4..42c94f6 100644
+--- a/src/WeatherScene.cpp
++++ b/src/WeatherScene.cpp
+@@ -171,7 +171,12 @@ WeatherScene::WeatherScene()
+     gHomeCountryCode = gCountryCode;
+ 
+     gSound = new Sound("rev_wtr.brsar", gHomeButton->mSoundData);
++#ifdef FORECAST_PORT
++    // Sound is off on the port for now (Sound.cpp): not fatal.
++    if (gSound == NULL) {
++#else
+     if (gSound == NULL || gSound->mData == NULL) {
++#endif
+         OSReport("%s[%d]:m_pSound\n", "d_s_weather.cpp", 345);
+         RequestFatal();
+         return;
+@@ -185,8 +190,8 @@ WeatherScene::WeatherScene()
+         RequestFatal();
+         return;
+     }
+-    gUnk80330B74 = (u32)mTPLWeather;
+-    TPLBind((TPLPalette*)gUnk80330B74);
++    gUnk80330B74 = PTR_TO_U32(mTPLWeather);
++    TPLBind(U32_TO_PTR(TPLPalette*, gUnk80330B74));
+ 
+     mLayoutArc = LoadCompressedContentFile(gUnk80330B64, "weather_layout.arc.LZ", 32, NULL, gMEM2Heap);
+     if (mLayoutArc == NULL) {
+@@ -526,11 +531,11 @@ void WeatherScene::DrawNormal() {
+ 
+     SetDefaultGXState();
+     SetOrthoProjection();
+-    DrawTextureAt((TPLPalette*)gUnk80330B74, id, 1.0f, 1.0f, pos);
++    DrawTextureAt(U32_TO_PTR(TPLPalette*, gUnk80330B74), id, 1.0f, 1.0f, pos);
+ 
+     if (sTitleFlags & 1) {
+         mIconPos.x = pos.x;
+-        mIconPos.y = pos.y + GetTexHeight((TPLPalette*)gUnk80330B74, id);
++        mIconPos.y = pos.y + GetTexHeight(U32_TO_PTR(TPLPalette*, gUnk80330B74), id);
+         mIconPos.z = pos.z;
+         TPLPalette* tpl = gCommonTpl;
+         u32 icon = 3;
+diff --git a/src/main.cpp b/src/main.cpp
+index e297592..0386252 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1,6 +1,11 @@
+ #include <channel/System.h>
+ 
++#ifdef FORECAST_PORT
++// The port's entry point (port/sdk/main.c, C) calls this after platform setup.
++extern "C" void channel_main(void) {
++#else
+ void main(void) {
++#endif
+     SystemInit();
+ 
+     while (true) {
+diff --git a/src/nw4r/ef/ef_animcurve.cpp b/src/nw4r/ef/ef_animcurve.cpp
+index 82fc70f..e4e2d72 100644
+--- a/src/nw4r/ef/ef_animcurve.cpp
++++ b/src/nw4r/ef/ef_animcurve.cpp
+@@ -2800,7 +2800,7 @@ void createChild(u8* pKeyData, u16 seed, AnimCurveHeader* pHeader,
+         }
+     }
+ 
+-    EmitterResource* pResource = reinterpret_cast<EmitterResource*>(
++    EmitterResource* pResource = U32_TO_PTR(EmitterResource*,
+         pNameTbl->datas[pChild->resIdx].work);
+ 
+     if (pResource == NULL) {
+diff --git a/src/nw4r/ef/ef_effect.cpp b/src/nw4r/ef/ef_effect.cpp
+index 16f6c8d..445c7df 100644
+--- a/src/nw4r/ef/ef_effect.cpp
++++ b/src/nw4r/ef/ef_effect.cpp
+@@ -84,12 +84,20 @@ Emitter* Effect::CreateEmitter(EmitterResource* pResource, u8 drawWeight,
+ 
+     Emitter* pEmitter = mManagerES->GetMemoryManager()->AllocEmitter();
+     if (pEmitter == NULL) {
++#ifdef FORECAST_PORT
++        return NULL;
++#else
+         return false;
++#endif
+     }
+ 
+     if (!pEmitter->Initialize(this, pResource, drawWeight)) {
+         mManagerES->GetMemoryManager()->FreeEmitter(pEmitter);
++#ifdef FORECAST_PORT
++        return NULL;
++#else
+         return false;
++#endif
+     }
+ 
+     mActivityList.ToActive(pEmitter);
+diff --git a/src/nw4r/ef/ef_memorymanager.cpp b/src/nw4r/ef/ef_memorymanager.cpp
+index 89bf7ad..0ce0d29 100644
+--- a/src/nw4r/ef/ef_memorymanager.cpp
++++ b/src/nw4r/ef/ef_memorymanager.cpp
+@@ -6,3 +6,11 @@
+ #include <nw4r/ef.h>
+ 
+ #include <nw4r/ef/ef_memorymanagerimpl.h>
++
++#ifdef FORECAST_PORT
++// Scene.cpp only has an opaque, Wii-sized stand-in for this class.
++MemoryManager* PortNewEfMemoryManager(void* pStartAddr, u32 size, int maxEffect, int maxEmitter,
++                                      int maxParticleManager, int maxParticle) {
++    return new MemoryManager(pStartAddr, size, maxEffect, maxEmitter, maxParticleManager, maxParticle);
++}
++#endif
+diff --git a/src/nw4r/ef/ef_resource.cpp b/src/nw4r/ef/ef_resource.cpp
+index 70ba9da..bb7bb55 100644
+--- a/src/nw4r/ef/ef_resource.cpp
++++ b/src/nw4r/ef/ef_resource.cpp
+@@ -417,7 +417,7 @@ u32 Resource::relocateCurveTexture(u8* pCmdList) {
+         int size = *reinterpret_cast<u16*>(pName);
+         pName += sizeof(u16);
+ 
+-        pNameTable->datas[i].work = reinterpret_cast<u32>(
++        pNameTable->datas[i].work = PTR_TO_U32(
+             _FindTexture(reinterpret_cast<const char*>(pName), NULL));
+ 
+         if (pName[0] != 0 && pNameTable->datas[i].work == 0) {
+@@ -456,7 +456,7 @@ u32 Resource::relocateCurveChild(u8* pCmdList) {
+         int size = *reinterpret_cast<u16*>(pName);
+         pName += sizeof(u16);
+ 
+-        pNameTable->datas[i].work = reinterpret_cast<u32>(
++        pNameTable->datas[i].work = PTR_TO_U32(
+             _FindEmitter(reinterpret_cast<char*>(pName), NULL));
+ 
+         if (pNameTable->datas[i].work == 0) {
+diff --git a/src/nw4r/g3d/g3d_calcview.cpp b/src/nw4r/g3d/g3d_calcview.cpp
+index a569c5c..ff8db42 100644
+--- a/src/nw4r/g3d/g3d_calcview.cpp
++++ b/src/nw4r/g3d/g3d_calcview.cpp
+@@ -16,6 +16,30 @@ namespace {
+ using nw4r::math::MTX34;
+ using nw4r::math::VEC3;
+ 
++#ifdef FORECAST_PORT
++
++void GetModelLocalAxisY2(math::VEC3* pVec, const math::MTX34* pModelMtx,
++                         const math::MTX34* pParentModelMtx) {
++    f32 a = pParentModelMtx->_00, b = pParentModelMtx->_01, c = pParentModelMtx->_02;
++    f32 d = pParentModelMtx->_10, e = pParentModelMtx->_11, f = pParentModelMtx->_12;
++    f32 g = pParentModelMtx->_20, h = pParentModelMtx->_21, i = pParentModelMtx->_22;
++    f32 det = a * (e * i - h * f) + d * (h * c - b * i) + g * (b * f - e * c);
++    if (det == 0.0f) {
++        pVec->x = pVec->y = pVec->z = 0.0f;
++        return;
++    }
++    f32 inv = 1.0f / det;
++    // Column 1 of inverse(parent 3x3).
++    f32 inv01 = (h * c - b * i) * inv;
++    f32 inv11 = (i * a - c * g) * inv;
++    f32 inv21 = (b * g - a * h) * inv;
++    const math::MTX34* m = pModelMtx;
++    pVec->x = m->_00 * inv01 + m->_01 * inv11 + m->_02 * inv21;
++    pVec->y = m->_10 * inv01 + m->_11 * inv11 + m->_12 * inv21;
++
++    pVec->z = 0.0f;
++}
++#else
+ asm void GetModelLocalAxisY2(register math::VEC3* pVec,
+                              register const math::MTX34* pModelMtx,
+                              register const math::MTX34* pParentModelMtx) {
+@@ -72,7 +96,35 @@ _lbl_80068168:
+     blr
+     // clang-format on
+ }
+-
++#endif
++
++#ifdef FORECAST_PORT
++
++void GetModelLocalAxisY3(math::VEC3* pVec, const math::MTX34* pModelMtx,
++                         const math::MTX34* pParentModelMtx) {
++    f32 a = pParentModelMtx->_00, b = pParentModelMtx->_01, c = pParentModelMtx->_02;
++    f32 d = pParentModelMtx->_10, e = pParentModelMtx->_11, f = pParentModelMtx->_12;
++    f32 g = pParentModelMtx->_20, h = pParentModelMtx->_21, i = pParentModelMtx->_22;
++    f32 det = a * (e * i - h * f) + d * (h * c - b * i) + g * (b * f - e * c);
++    if (det == 0.0f) {
++        pVec->x = pVec->y = pVec->z = 0.0f;
++        return;
++    }
++    f32 inv = 1.0f / det;
++    // Column 1 of inverse(parent 3x3).
++    f32 inv01 = (h * c - b * i) * inv;
++    f32 inv11 = (i * a - c * g) * inv;
++    f32 inv21 = (b * g - a * h) * inv;
++    const math::MTX34* m = pModelMtx;
++    pVec->x = m->_00 * inv01 + m->_01 * inv11 + m->_02 * inv21;
++    pVec->y = m->_10 * inv01 + m->_11 * inv11 + m->_12 * inv21;
++
++    // Reproduces the original paired-single code exactly: its z term reuses
++    // the (inv21, (c - i) / det) pair rather than column 1 of the inverse.
++    f32 odd = (c - i) * inv;
++    pVec->z = m->_20 * inv21 + m->_21 * odd + m->_22 * inv21;
++}
++#else
+ asm void GetModelLocalAxisY3(register math::VEC3* pVec,
+                              register const math::MTX34* pModelMtx,
+                              register const math::MTX34* pParentModelMtx) {
+@@ -135,7 +187,16 @@ _lbl_80068218:
+     blr
+     // clang-format on
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++
++inline void SetMdlViewMtxSR(math::MTX34* pViewPos, const math::VEC3& rRY, f32 s) {
++    pViewPos->_00 = rRY.y * s;  pViewPos->_01 = rRY.x * s; pViewPos->_02 = 0.0f;
++    pViewPos->_10 = -rRY.x * s; pViewPos->_11 = rRY.y * s; pViewPos->_12 = 0.0f;
++    pViewPos->_20 = 0.0f;       pViewPos->_21 = 0.0f;      pViewPos->_22 = s;
++}
++#else
+ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+                             register const math::VEC3& rRY, register f32 s) {
+     register f32 work0, work1;
+@@ -155,7 +216,17 @@ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+         stfs       s,      MTX34._22(pViewPos)
+     )
+ }
++#endif
++
++#ifdef FORECAST_PORT
+ 
++inline void SetMdlViewMtxSR(math::MTX34* pViewPos, const math::VEC3& rRY,
++                            f32 sx, f32 sy, f32 sz) {
++    pViewPos->_00 = rRY.y * sx;  pViewPos->_01 = rRY.x * sy; pViewPos->_02 = 0.0f;
++    pViewPos->_10 = -rRY.x * sx; pViewPos->_11 = rRY.y * sy; pViewPos->_12 = 0.0f;
++    pViewPos->_20 = 0.0f;        pViewPos->_21 = 0.0f;       pViewPos->_22 = sz;
++}
++#else
+ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+                             register const math::VEC3& rRY, register f32 sx,
+                             register f32 sy, register f32 sz) {
+@@ -179,7 +250,18 @@ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+         stfs       sz,     MTX34._22(pViewPos)
+     )
+ }
++#endif
++
++#ifdef FORECAST_PORT
+ 
++inline void SetMdlViewMtxSR(math::MTX34* pViewPos, const math::VEC3& rRX,
++                            const math::VEC3& rRY, const math::VEC3& rRZ,
++                            f32 sx, f32 sy, f32 sz) {
++    pViewPos->_00 = rRX.x * sx; pViewPos->_01 = rRY.x * sy; pViewPos->_02 = rRZ.x * sz;
++    pViewPos->_10 = rRX.y * sx; pViewPos->_11 = rRY.y * sy; pViewPos->_12 = rRZ.y * sz;
++    pViewPos->_20 = rRX.z * sx; pViewPos->_21 = rRY.z * sy; pViewPos->_22 = rRZ.z * sz;
++}
++#else
+ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+                             register const math::VEC3& rRX,
+                             register const math::VEC3& rRY,
+@@ -213,6 +295,7 @@ inline void SetMdlViewMtxSR(register math::MTX34* pViewPos,
+         stfs       work0, MTX34._22(pViewPos)
+     )
+ }
++#endif
+ 
+ } // namespace
+ 
+diff --git a/src/nw4r/g3d/g3d_calcvtx.cpp b/src/nw4r/g3d/g3d_calcvtx.cpp
+index b40c3e5..cfa2193 100644
+--- a/src/nw4r/g3d/g3d_calcvtx.cpp
++++ b/src/nw4r/g3d/g3d_calcvtx.cpp
+@@ -76,17 +76,27 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+             for (; pVtxPosBuf < pVtxPosBufEnd; pVtxPosBuf++) {
+                 register f32 xy, z_;
++#ifdef FORECAST_PORT
++                f32 xy1;
++#endif
+ 
+                 KeyShape& rFirst = keyShape[0];
+                 register f32 firstWeight = rFirst.weight;
+                 register const void* pVtx = rFirst.pVtx;
+ 
++#ifdef FORECAST_PORT
++                {
++                    const f32* v = static_cast<const f32*>(pVtx);
++                    xy = v[0] * firstWeight; xy1 = v[1] * firstWeight; z_ = v[2] * firstWeight;
++                }
++#else
+                 ASM (
+                     psq_l  xy, VEC3.x(pVtx), 0, 0
+                     psq_l  z_, VEC3.z(pVtx), 1, 0
+                     ps_mul xy, xy, firstWeight
+                     ps_mul z_, z_, firstWeight
+                 )
++#endif
+ 
+                 // clang-format off
+                 rFirst.pVtx = reinterpret_cast<const math::VEC3*>(
+@@ -98,12 +108,19 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+                     register const void* pKeyVtx = pKey->pVtx;
+                     register f32 key_xy, key_z_;
+ 
++#ifdef FORECAST_PORT
++                    {
++                        const f32* kv = static_cast<const f32*>(pKeyVtx);
++                        xy += kv[0] * keyWeight; xy1 += kv[1] * keyWeight; z_ += kv[2] * keyWeight;
++                    }
++#else
+                     ASM (
+                         psq_l   key_xy, VEC3.x(pKeyVtx), 0, 0
+                         psq_l   key_z_, VEC3.z(pKeyVtx), 1, 0
+                         ps_madd xy, key_xy, keyWeight, xy
+                         ps_madd z_, key_z_, keyWeight, z_
+                     )
++#endif
+ 
+                     // clang-format off
+                     pKey->pVtx = reinterpret_cast<const math::VEC3*>(
+@@ -113,10 +130,17 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+                 register void* pDst = pVtxPosBuf;
+ 
++#ifdef FORECAST_PORT
++                {
++                    f32* dv = static_cast<f32*>(pDst);
++                    dv[0] = xy; dv[1] = xy1; dv[2] = z_;
++                }
++#else
+                 ASM (
+                     psq_st xy, VEC3.x(pDst), 0, 0
+                     psq_st z_, VEC3.z(pDst), 1, 0
+                 )
++#endif
+             }
+ 
+             DC::StoreRange(vtxPos.GetData(), numVtx * sizeof(math::VEC3));
+@@ -175,17 +199,27 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+             for (; pVtxNrmBuf < pVtxNrmBufEnd; pVtxNrmBuf++) {
+                 register f32 xy, z_;
++#ifdef FORECAST_PORT
++                f32 xy1;
++#endif
+ 
+                 KeyShape& rFirst = keyShape[0];
+                 register f32 firstWeight = rFirst.weight;
+                 register const void* pVtx = rFirst.pVtx;
+ 
++#ifdef FORECAST_PORT
++                {
++                    const f32* v = static_cast<const f32*>(pVtx);
++                    xy = v[0] * firstWeight; xy1 = v[1] * firstWeight; z_ = v[2] * firstWeight;
++                }
++#else
+                 ASM (
+                     psq_l  xy, VEC3.x(pVtx), 0, 0
+                     psq_l  z_, VEC3.z(pVtx), 1, 0
+                     ps_mul xy, xy, firstWeight
+                     ps_mul z_, z_, firstWeight
+                 )
++#endif
+ 
+                 // clang-format off
+                 rFirst.pVtx = reinterpret_cast<const math::VEC3*>(
+@@ -197,12 +231,19 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+                     register const void* pKeyVtx = pKey->pVtx;
+                     register f32 key_xy, key_z_;
+ 
++#ifdef FORECAST_PORT
++                    {
++                        const f32* kv = static_cast<const f32*>(pKeyVtx);
++                        xy += kv[0] * keyWeight; xy1 += kv[1] * keyWeight; z_ += kv[2] * keyWeight;
++                    }
++#else
+                     ASM (
+                         psq_l   key_xy, VEC3.x(pKeyVtx), 0, 0
+                         psq_l   key_z_, VEC3.z(pKeyVtx), 1, 0
+                         ps_madd xy, key_xy, keyWeight, xy
+                         ps_madd z_, key_z_, keyWeight, z_
+                     )
++#endif
+ 
+                     // clang-format off
+                     pKey->pVtx = reinterpret_cast<const math::VEC3*>(
+@@ -212,10 +253,17 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+                 register void* pDst = pVtxNrmBuf;
+ 
++#ifdef FORECAST_PORT
++                {
++                    f32* dv = static_cast<f32*>(pDst);
++                    dv[0] = xy; dv[1] = xy1; dv[2] = z_;
++                }
++#else
+                 ASM (
+                     psq_st xy, VEC3.x(pDst), 0, 0
+                     psq_st z_, VEC3.z(pDst), 1, 0
+                 )
++#endif
+             }
+ 
+             DC::StoreRange(vtxNrm.GetData(), numVtx * sizeof(math::VEC3));
+@@ -274,17 +322,28 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+             for (; pVtxClrBuf < pVtxClrBufEnd; pVtxClrBuf++) {
+                 register f32 rg, ba;
++#ifdef FORECAST_PORT
++                f32 rg1, ba1;
++#endif
+ 
+                 KeyShape& rFirst = keyShape[0];
+                 register f32 firstWeight = rFirst.weight;
+                 register const void* pVtx = rFirst.pVtx;
+ 
++#ifdef FORECAST_PORT
++                {
++                    const u8* v = static_cast<const u8*>(pVtx);
++                    rg = v[0] * firstWeight; rg1 = v[1] * firstWeight;
++                    ba = v[2] * firstWeight; ba1 = v[3] * firstWeight;
++                }
++#else
+                 ASM (
+                     psq_l  rg, Color.r(pVtx), 0, 2
+                     psq_l  ba, Color.b(pVtx), 0, 2
+                     ps_mul rg, rg, firstWeight
+                     ps_mul ba, ba, firstWeight
+                 )
++#endif
+ 
+                 // clang-format off
+                 rFirst.pVtx = reinterpret_cast<const ut::Color*>(
+@@ -296,12 +355,20 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+                     register const void* pKeyVtx = pKey->pVtx;
+                     register f32 key_rg, key_ba;
+ 
++#ifdef FORECAST_PORT
++                    {
++                        const u8* kv = static_cast<const u8*>(pKeyVtx);
++                        rg += kv[0] * keyWeight; rg1 += kv[1] * keyWeight;
++                        ba += kv[2] * keyWeight; ba1 += kv[3] * keyWeight;
++                    }
++#else
+                     ASM (
+                         psq_l   key_rg, Color.r(pKeyVtx), 0, 2
+                         psq_l   key_ba, Color.b(pKeyVtx), 0, 2
+                         ps_madd rg, key_rg, keyWeight, rg
+                         ps_madd ba, key_ba, keyWeight, ba
+                     )
++#endif
+ 
+                     // clang-format off
+                     pKey->pVtx = reinterpret_cast<const ut::Color*>(
+@@ -311,10 +378,18 @@ void CalcVtx(ResMdl mdl, AnmObjShp* pAnmShp, ResVtxPosData** ppVtxPosTable,
+ 
+                 register void* pDst = pVtxClrBuf;
+ 
++#ifdef FORECAST_PORT
++                {
++                    u8* dv = static_cast<u8*>(pDst);
++                    dv[0] = __OSf32tou8(rg); dv[1] = __OSf32tou8(rg1);
++                    dv[2] = __OSf32tou8(ba); dv[3] = __OSf32tou8(ba1);
++                }
++#else
+                 ASM (
+                     psq_st rg, Color.r(pDst), 0, 2
+                     psq_st ba, Color.b(pDst), 0, 2
+                 )
++#endif
+             }
+ 
+             DC::StoreRange(vtxClr.GetData(), numVtx * sizeof(ut::Color));
+diff --git a/src/nw4r/g3d/g3d_calcworld.cpp b/src/nw4r/g3d/g3d_calcworld.cpp
+index 96fc154..1bf784f 100644
+--- a/src/nw4r/g3d/g3d_calcworld.cpp
++++ b/src/nw4r/g3d/g3d_calcworld.cpp
+@@ -189,6 +189,9 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+ 
+             M00 = 0.0f;
+ 
++#ifdef FORECAST_PORT
++            f32 Macc[12] = {0};
++#else
+             ASM (
+                 ps_merge00 M00, M00, M00
+                 ps_merge00 M02, M00, M00
+@@ -197,6 +200,7 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+                 ps_merge00 M20, M00, M00
+                 ps_merge00 M22, M00, M00
+             )
++#endif
+ 
+             for (u32 i = 0; i < numBlendMtx; i++) {
+                 u32 mtxID =
+@@ -215,6 +219,11 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+ 
+                 register math::MTX34* pT = &pSkinMtxArray[mtxID];
+ 
++#ifdef FORECAST_PORT
++                for (int k = 0; k < 12; k++) {
++                    Macc[k] += pT->m[k / 4][k % 4] * R;
++                }
++#else
+                 ASM (
+                     psq_l T00, MTX34._00(pT), 0, 0
+                     psq_l T02, MTX34._02(pT), 0, 0
+@@ -230,6 +239,7 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+                     ps_madds0 M20, T20, R, M20
+                     ps_madds0 M22, T22, R, M22
+                 )
++#endif
+ 
+                 pModelMtxAttribArray[targetMtxID] &=
+                     pModelMtxAttribArray[mtxID];
+@@ -239,6 +249,11 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+ 
+             register math::MTX34* pTargetMtx = &pModelMtxArray[targetMtxID];
+ 
++#ifdef FORECAST_PORT
++            for (int k = 0; k < 12; k++) {
++                pTargetMtx->m[k / 4][k % 4] = Macc[k];
++            }
++#else
+             ASM (
+                 psq_st M00, MTX34._00(pTargetMtx), 0, 0
+                 psq_st M02, MTX34._02(pTargetMtx), 0, 0
+@@ -247,6 +262,7 @@ void CalcSkinning(math::MTX34* pModelMtxArray, u32* pModelMtxAttribArray,
+                 psq_st M20, MTX34._20(pTargetMtx), 0, 0
+                 psq_st M22, MTX34._22(pTargetMtx), 0, 0
+             )
++#endif
+ 
+         } else /* Assume EVPMTX */ {
+             u32 mtxID = (pEvpMtxCmd->mtxIdHi << 8) + pEvpMtxCmd->mtxIdLo;
+diff --git a/src/nw4r/g3d/g3d_fog.cpp b/src/nw4r/g3d/g3d_fog.cpp
+index d704f54..3085d0b 100644
+--- a/src/nw4r/g3d/g3d_fog.cpp
++++ b/src/nw4r/g3d/g3d_fog.cpp
+@@ -32,6 +32,16 @@ void Fog::Init() {
+     }
+ }
+ 
++#ifdef FORECAST_PORT
++Fog Fog::CopyTo(void* pDst) const {
++    if (pDst != NULL && IsValid()) {
++        std::memcpy(pDst, ptr(), sizeof(FogData));
++        return Fog(static_cast<FogData*>(pDst));
++    }
++
++    return Fog(NULL);
++}
++#else
+ Fog Fog::CopyTo(register void* pDst) const {
+     if (pDst != NULL && IsValid()) {
+         register const FogData* pSrc = ptr();
+@@ -62,6 +72,7 @@ Fog Fog::CopyTo(register void* pDst) const {
+ 
+     return Fog(NULL);
+ }
++#endif
+ 
+ void Fog::SetFogRangeAdjParam(u16 width, u16 center,
+                               const math::MTX44& rProjMtx) {
+diff --git a/src/nw4r/g3d/g3d_workmem.cpp b/src/nw4r/g3d/g3d_workmem.cpp
+index 424c25c..d694bcd 100644
+--- a/src/nw4r/g3d/g3d_workmem.cpp
++++ b/src/nw4r/g3d/g3d_workmem.cpp
+@@ -22,7 +22,11 @@ union {
+ } // namespace
+ 
+ math::VEC3* GetScaleTemporary() {
++#ifdef FORECAST_PORT
++    return static_cast<math::VEC3*>(&sTemp.tmpScale[0]);
++#else
+     return static_cast<math::VEC3*>(sTemp.tmpScale);
++#endif
+ }
+ 
+ u32* GetMtxIDTemporary() {
+@@ -34,11 +38,19 @@ MdlZ* GetMdlZTemporary() {
+ }
+ 
+ math::MTX34* GetSkinningMtxTemporary() {
++#ifdef FORECAST_PORT
++    return static_cast<math::MTX34*>(&sTemp.skinningMtx[0]);
++#else
+     return static_cast<math::MTX34*>(sTemp.skinningMtx);
++#endif
+ }
+ 
+ math::MTX34* GetBillboardMtxTemporary() {
++#ifdef FORECAST_PORT
++    return static_cast<math::MTX34*>(&sTemp.bbMtx[0]);
++#else
+     return static_cast<math::MTX34*>(sTemp.bbMtx);
++#endif
+ }
+ 
+ ShpAnmResultBuf* GetShpAnmResultBufTemporary() {
+diff --git a/src/nw4r/g3d/platform/g3d_cpu.cpp b/src/nw4r/g3d/platform/g3d_cpu.cpp
+index 8fb5d53..0b2916f 100644
+--- a/src/nw4r/g3d/platform/g3d_cpu.cpp
++++ b/src/nw4r/g3d/platform/g3d_cpu.cpp
+@@ -4,6 +4,11 @@ namespace nw4r {
+ namespace g3d {
+ namespace detail {
+ 
++#ifdef FORECAST_PORT
++void Copy32ByteBlocks(void* pDst, const void* pSrc, u32 size) {
++    std::memcpy(pDst, pSrc, size & ~31u);
++}
++#else
+ void Copy32ByteBlocks(register void* pDst, register const void* pSrc,
+                       register u32 size) {
+     register f32 work0, work1, work2, work3;
+@@ -27,7 +32,13 @@ void Copy32ByteBlocks(register void* pDst, register const void* pSrc,
+         pSrc = static_cast<const u8*>(pSrc) + 32;
+     }
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++void ZeroMemory32ByteBlocks(void* pDst, u32 size) {
++    std::memset(pDst, 0, size & ~31u);
++}
++#else
+ void ZeroMemory32ByteBlocks(register void* pDst, register u32 size) {
+     register f32 zero = 0.0f;
+ 
+@@ -42,6 +53,7 @@ void ZeroMemory32ByteBlocks(register void* pDst, register u32 size) {
+         pDst = static_cast<u8*>(pDst) + 32;
+     }
+ }
++#endif
+ 
+ } // namespace detail
+ } // namespace g3d
+diff --git a/src/nw4r/g3d/res/g3d_resshp.cpp b/src/nw4r/g3d/res/g3d_resshp.cpp
+index e10a970..17446e9 100644
+--- a/src/nw4r/g3d/res/g3d_resshp.cpp
++++ b/src/nw4r/g3d/res/g3d_resshp.cpp
+@@ -148,7 +148,7 @@ void ResShp::GXSetArray(GXAttr attr, const void* pBase, u8 stride) {
+     u32 cpAttr = attr != GX_VA_NBT ? attr - GX_VA_POS : 1;
+ 
+     detail::ResWriteCPCmd(&pCmd[GX_CP_CMD_SZ * 0], cpAttr + GX_CP_REG_ARRAYBASE,
+-                          reinterpret_cast<u32>(OSCachedToPhysical(pBase)));
++                          static_cast<u32>(PTR_ADDR(OSCachedToPhysical(pBase))));
+ 
+     detail::ResWriteCPCmd(&pCmd[GX_CP_CMD_SZ * 1],
+                           cpAttr + GX_CP_REG_ARRAYSTRIDE, stride);
+diff --git a/src/nw4r/lyt/lyt_arcResourceAccessor.cpp b/src/nw4r/lyt/lyt_arcResourceAccessor.cpp
+index 818a48e..8d013ee 100644
+--- a/src/nw4r/lyt/lyt_arcResourceAccessor.cpp
++++ b/src/nw4r/lyt/lyt_arcResourceAccessor.cpp
+@@ -40,7 +40,7 @@ s32 FindNameResource(ARCHandle* pHandle, const char* pName) {
+ }
+ 
+ void* GetResourceSub(ARCHandle* pHandle, const char* pRootDir, u32 type,
+-                     const char* pName, unsigned long* pSize) {
++                     const char* pName, u32* pSize) {
+ 
+     s32 entrynum = -1;
+ 
+diff --git a/src/nw4r/lyt/lyt_common.cpp b/src/nw4r/lyt/lyt_common.cpp
+index 50f480f..1375aa4 100644
+--- a/src/nw4r/lyt/lyt_common.cpp
++++ b/src/nw4r/lyt/lyt_common.cpp
+@@ -219,7 +219,14 @@ void DrawQuad(const math::VEC2& rBase, const Size& rSize, u8 num,
+ }
+ 
+ void InitTexObj(GXTexObj* pTexObj, TPLPalette* pPalette, u32 id) {
++#ifdef FORECAST_PORT
++    // Unbound palettes hold file offsets, but port pointers can be below
++    // 0x80000000 too. TPLBind converts the version number to native order
++    // as it binds, so an unconverted version means unbound.
++    if (pPalette->versionNumber != 2142000) {
++#else
+     if (reinterpret_cast<u32>(pPalette->descriptorArray) < 0x80000000) {
++#endif
+         TPLBind(pPalette);
+     }
+ 
+diff --git a/src/nw4r/lyt/lyt_layout.cpp b/src/nw4r/lyt/lyt_layout.cpp
+index a2531af..4e9664f 100644
+--- a/src/nw4r/lyt/lyt_layout.cpp
++++ b/src/nw4r/lyt/lyt_layout.cpp
+@@ -1,3 +1,6 @@
++#ifdef FORECAST_PORT
++#include <port_res.h>
++#endif
+ #include <nw4r/lyt.h>
+ #include <nw4r/ut.h>
+ 
+@@ -59,6 +62,9 @@ Layout::~Layout() {
+ }
+ 
+ bool Layout::Build(const void* pLytBinary, ResourceAccessor* pAccessor) {
++#ifdef FORECAST_PORT
++    port::SwapLayoutToNative(pLytBinary);
++#endif
+     const res::BinaryFileHeader* const pHeader =
+         static_cast<const res::BinaryFileHeader*>(pLytBinary);
+ 
+@@ -189,6 +195,9 @@ bool Layout::Build(const void* pLytBinary, ResourceAccessor* pAccessor) {
+ 
+ AnimTransform* Layout::CreateAnimTransform(const void* pAnmBinary,
+                                            ResourceAccessor* pAccessor) {
++#ifdef FORECAST_PORT
++    port::SwapAnimationToNative(pAnmBinary);
++#endif
+ 
+     const res::BinaryFileHeader* const pHeader =
+         static_cast<const res::BinaryFileHeader*>(pAnmBinary);
+diff --git a/src/nw4r/math/math_arithmetic.cpp b/src/nw4r/math/math_arithmetic.cpp
+index 40a3e03..c6e2623 100644
+--- a/src/nw4r/math/math_arithmetic.cpp
++++ b/src/nw4r/math/math_arithmetic.cpp
+@@ -57,6 +57,11 @@ f32 FLog(f32 x) {
+ 
+ } // namespace detail
+ 
++#ifdef FORECAST_PORT
++f32 FrSqrt(f32 x) {
++    return 1.0f / __builtin_sqrtf(x);
++}
++#else
+ f32 FrSqrt(register f32 x) {
+     register f32 rsqrt;
+     register f32 c_half = 0.5f, c_three = 3.0f;
+@@ -76,6 +81,7 @@ f32 FrSqrt(register f32 x) {
+ 
+     return work1;
+ }
++#endif
+ 
+ u32 CntBit1(u32 x) {
+     x = x - ((x >> 1) & 0x55555555);
+diff --git a/src/nw4r/math/math_types.cpp b/src/nw4r/math/math_types.cpp
+index 9eed3d1..d5a62ff 100644
+--- a/src/nw4r/math/math_types.cpp
++++ b/src/nw4r/math/math_types.cpp
+@@ -15,6 +15,14 @@
+ namespace nw4r {
+ namespace math {
+ 
++#ifdef FORECAST_PORT
++VEC3* VEC3Maximize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
++    pOut->x = pA->x - pB->x >= 0.0f ? pA->x : pB->x;
++    pOut->y = pA->y - pB->y >= 0.0f ? pA->y : pB->y;
++    pOut->z = pA->z - pB->z >= 0.0f ? pA->z : pB->z;
++    return pOut;
++}
++#else
+ VEC3* VEC3Maximize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+     register f32 fx, fy;
+     register f32 dt, work;
+@@ -30,7 +38,16 @@ VEC3* VEC3Maximize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+ 
+     return pOut;
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++VEC3* VEC3Minimize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
++    pOut->x = pB->x - pA->x >= 0.0f ? pA->x : pB->x;
++    pOut->y = pB->y - pA->y >= 0.0f ? pA->y : pB->y;
++    pOut->z = pB->z - pA->z >= 0.0f ? pA->z : pB->z;
++    return pOut;
++}
++#else
+ VEC3* VEC3Minimize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+     register f32 fx, fy;
+     register f32 dt, work;
+@@ -46,7 +63,16 @@ VEC3* VEC3Minimize(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+ 
+     return pOut;
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++MTX33* MTX33Identity(MTX33* pMtx) {
++    pMtx->_00 = 1.0f; pMtx->_01 = 0.0f; pMtx->_02 = 0.0f;
++    pMtx->_10 = 0.0f; pMtx->_11 = 1.0f; pMtx->_12 = 0.0f;
++    pMtx->_20 = 0.0f; pMtx->_21 = 0.0f; pMtx->_22 = 1.0f;
++    return pMtx;
++}
++#else
+ MTX33* MTX33Identity(register MTX33* pMtx) {
+     register f32 c_00 = 0.0f, c_10 = 1.0f;
+     register f32 c_11;
+@@ -64,7 +90,16 @@ MTX33* MTX33Identity(register MTX33* pMtx) {
+ 
+     return pMtx;
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++MTX33* MTX34ToMTX33(MTX33* pOut, const MTX34* pIn) {
++    pOut->_00 = pIn->_00; pOut->_01 = pIn->_01; pOut->_02 = pIn->_02;
++    pOut->_10 = pIn->_10; pOut->_11 = pIn->_11; pOut->_12 = pIn->_12;
++    pOut->_20 = pIn->_20; pOut->_21 = pIn->_21; pOut->_22 = pIn->_22;
++    return pOut;
++}
++#else
+ MTX33* MTX34ToMTX33(register MTX33* pOut, register const MTX34* pIn) {
+     register f32 row0a, row0b, row1a, row1b, row2a, row2b;
+ 
+@@ -86,10 +121,33 @@ MTX33* MTX34ToMTX33(register MTX33* pOut, register const MTX34* pIn) {
+ 
+     return pOut;
+ }
++#endif
+ 
+ #define nofralloc
+ #undef PURE_ASM
+ 
++#ifdef FORECAST_PORT
++u32 MTX34InvTranspose(MTX33* pOut, const MTX34* pIn) {
++    f32 a = pIn->_00, b = pIn->_01, c = pIn->_02;
++    f32 d = pIn->_10, e = pIn->_11, f = pIn->_12;
++    f32 g = pIn->_20, h = pIn->_21, i = pIn->_22;
++    f32 c00 = e * i - f * h, c01 = f * g - d * i, c02 = d * h - e * g;
++    f32 det = a * c00 + b * c01 + c * c02;
++    if (det == 0.0f) {
++        return FALSE;
++    }
++    f32 inv = 1.0f / det;
++    // Inverse transpose = cofactor matrix / det.
++    pOut->_00 = c00 * inv; pOut->_01 = c01 * inv; pOut->_02 = c02 * inv;
++    pOut->_10 = (c * h - b * i) * inv;
++    pOut->_11 = (a * i - c * g) * inv;
++    pOut->_12 = (b * g - a * h) * inv;
++    pOut->_20 = (b * f - c * e) * inv;
++    pOut->_21 = (c * d - a * f) * inv;
++    pOut->_22 = (a * e - b * d) * inv;
++    return TRUE;
++}
++#else
+ asm u32 MTX34InvTranspose(register MTX33* pOut, register const MTX34* pIn){
+     // clang-format off
+     nofralloc
+@@ -164,7 +222,16 @@ inverse_exists:
+     blr
+     // clang-format on
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++MTX34* MTX34Zero(MTX34* pMtx) {
++    for (int r = 0; r < 3; r++)
++        for (int c = 0; c < 4; c++)
++            pMtx->m[r][c] = 0.0f;
++    return pMtx;
++}
++#else
+ MTX34* MTX34Zero(register MTX34* pMtx) {
+     register f32 c_zero = 0.0f;
+ 
+@@ -179,7 +246,20 @@ MTX34* MTX34Zero(register MTX34* pMtx) {
+ 
+     return pMtx;
+ }
+-
++#endif
++
++#ifdef FORECAST_PORT
++MTX34* MTX34Scale(MTX34* pOut, const MTX34* pIn, const VEC3* pScale) {
++    // pIn * diag(scale): scale columns 0-2, keep translation.
++    for (int r = 0; r < 3; r++) {
++        pOut->m[r][0] = pIn->m[r][0] * pScale->x;
++        pOut->m[r][1] = pIn->m[r][1] * pScale->y;
++        pOut->m[r][2] = pIn->m[r][2] * pScale->z;
++        pOut->m[r][3] = pIn->m[r][3];
++    }
++    return pOut;
++}
++#else
+ MTX34* MTX34Scale(register MTX34* pOut, register const MTX34* pIn,
+                   register const VEC3* pScale) {
+     register f32 xy, z;
+@@ -215,7 +295,19 @@ MTX34* MTX34Scale(register MTX34* pOut, register const MTX34* pIn,
+ 
+     return pOut;
+ }
+-
++#endif
++
++#ifdef FORECAST_PORT
++MTX34* MTX34Trans(MTX34* pOut, const MTX34* pIn, const VEC3* pTrans) {
++    // pIn * translate(t): copy 3x3, new column 3 = R*t + old column 3.
++    for (int r = 0; r < 3; r++) {
++        f32 r0 = pIn->m[r][0], r1 = pIn->m[r][1], r2 = pIn->m[r][2];
++        pOut->m[r][3] = r0 * pTrans->x + r1 * pTrans->y + r2 * pTrans->z + pIn->m[r][3];
++        pOut->m[r][0] = r0; pOut->m[r][1] = r1; pOut->m[r][2] = r2;
++    }
++    return pOut;
++}
++#else
+ MTX34* MTX34Trans(register MTX34* pOut, register const MTX34* pIn,
+                   register const VEC3* pTrans) {
+     register f32 xy, z;
+@@ -268,6 +360,7 @@ MTX34* MTX34Trans(register MTX34* pOut, register const MTX34* pIn,
+ 
+     return pOut;
+ }
++#endif
+ 
+ MTX34* MTX34RotAxisFIdx(MTX34* pMtx, const VEC3* pAxis, f32 fidx) {
+     PSMTXRotAxisRad(*pMtx, *pAxis, NW4R_MATH_FIDX_TO_RAD(fidx));
+@@ -318,6 +411,14 @@ VEC3* VEC3TransformNormal(VEC3* pOut, const MTX34* pMtx, const VEC3* pVec) {
+     return pOut;
+ }
+ 
++#ifdef FORECAST_PORT
++MTX44* MTX44Identity(MTX44* pMtx) {
++    for (int r = 0; r < 4; r++)
++        for (int c = 0; c < 4; c++)
++            pMtx->m[r][c] = r == c ? 1.0f : 0.0f;
++    return pMtx;
++}
++#else
+ MTX44* MTX44Identity(register MTX44* pMtx) {
+     register f32 c_zero = 0.0f, c_one = 1.0f;
+     register f32 c_01, c_10;
+@@ -338,7 +439,16 @@ MTX44* MTX44Identity(register MTX44* pMtx) {
+ 
+     return pMtx;
+ }
++#endif
+ 
++#ifdef FORECAST_PORT
++MTX44* MTX44Copy(MTX44* pDst, const MTX44* pSrc) {
++    if (pDst != pSrc) {
++        std::memcpy(pDst, pSrc, sizeof(MTX44));
++    }
++    return pDst;
++}
++#else
+ MTX44* MTX44Copy(register MTX44* pDst, register const MTX44* pSrc) {
+     register f32 row0a, row0b;
+     register f32 row1a, row1b;
+@@ -367,6 +477,7 @@ MTX44* MTX44Copy(register MTX44* pDst, register const MTX44* pSrc) {
+ 
+     return pDst;
+ }
++#endif
+ 
+ } // namespace math
+ } // namespace nw4r
+diff --git a/src/nw4r/snd/snd_AxManager.cpp b/src/nw4r/snd/snd_AxManager.cpp
+index c068643..1b1e6f7 100644
+--- a/src/nw4r/snd/snd_AxManager.cpp
++++ b/src/nw4r/snd/snd_AxManager.cpp
+@@ -355,7 +355,7 @@ void AxManager::AuxCallbackFunc(void* pChans, void* pContext) {
+     void* buffer[AX_DPL2_MAX];
+ 
+     void** ppChans = static_cast<void**>(pChans);
+-    AuxBus bus = static_cast<AuxBus>(reinterpret_cast<u32>(pContext));
++    AuxBus bus = static_cast<AuxBus>(PTR_ADDR(pContext));
+ 
+     if (GetInstance().GetOutputMode() == OUTPUT_MODE_DPL2) {
+         num = AX_DPL2_MAX;
+diff --git a/src/nw4r/snd/snd_AxVoice.cpp b/src/nw4r/snd/snd_AxVoice.cpp
+index fa82deb..5da2a97 100644
+--- a/src/nw4r/snd/snd_AxVoice.cpp
++++ b/src/nw4r/snd/snd_AxVoice.cpp
+@@ -205,19 +205,19 @@ u32 AxVoice::GetDspAddressBySample(const void* pBase, u32 samples, Format fmt) {
+         // clang-format off
+         addr = (samples / AX_ADPCM_SAMPLES_PER_FRAME * AX_ADPCM_NIBBLES_PER_FRAME) +
+                (samples % AX_ADPCM_SAMPLES_PER_FRAME) +
+-               (reinterpret_cast<u32>(pBase) * sizeof(u16)) +
++               (static_cast<u32>(PTR_ADDR(pBase)) * sizeof(u16)) +
+                sizeof(u16);
+         // clang-format on
+         break;
+     }
+ 
+     case FORMAT_PCM8: {
+-        addr = reinterpret_cast<u32>(pBase) + samples;
++        addr = static_cast<u32>(PTR_ADDR(pBase)) + samples;
+ 
+         break;
+     }
+     case FORMAT_PCM16: {
+-        addr = reinterpret_cast<u32>(pBase) / sizeof(u16) + samples;
++        addr = static_cast<u32>(PTR_ADDR(pBase)) / sizeof(u16) + samples;
+         break;
+     }
+     }
+@@ -234,7 +234,7 @@ u32 AxVoice::GetSampleByDspAddress(const void* pBase, u32 addr, Format fmt) {
+ 
+     switch (fmt) {
+     case FORMAT_ADPCM: {
+-        samples = addr - reinterpret_cast<u32>(pBase) * sizeof(u16);
++        samples = addr - static_cast<u32>(PTR_ADDR(pBase)) * sizeof(u16);
+         // clang-format off
+         samples = (samples % AX_ADPCM_NIBBLES_PER_FRAME) +
+                   (samples / AX_ADPCM_NIBBLES_PER_FRAME * AX_ADPCM_SAMPLES_PER_FRAME) -
+@@ -244,12 +244,12 @@ u32 AxVoice::GetSampleByDspAddress(const void* pBase, u32 addr, Format fmt) {
+     }
+ 
+     case FORMAT_PCM8: {
+-        samples = addr - reinterpret_cast<u32>(pBase);
++        samples = addr - static_cast<u32>(PTR_ADDR(pBase));
+         break;
+     }
+ 
+     case FORMAT_PCM16: {
+-        samples = addr - reinterpret_cast<u32>(pBase) / sizeof(u16);
++        samples = addr - static_cast<u32>(PTR_ADDR(pBase)) / sizeof(u16);
+         break;
+     }
+     }
+diff --git a/src/nw4r/snd/snd_AxfxImpl.cpp b/src/nw4r/snd/snd_AxfxImpl.cpp
+index b4e52cb..2f59ddc 100644
+--- a/src/nw4r/snd/snd_AxfxImpl.cpp
++++ b/src/nw4r/snd/snd_AxfxImpl.cpp
+@@ -30,7 +30,7 @@ void AxfxImpl::RestoreAlloc(AXFXAllocHook allocHook, AXFXFreeHook freeHook) {
+     mCurrentFx = NULL;
+ }
+ 
+-void* AxfxImpl::Alloc(u32 size) {
++void* AxfxImpl::Alloc(size_t size) {
+     void* pBlock = MEMAllocFromFrmHeap(mCurrentFx->mHeap, size);
+ 
+     mCurrentFx->mAllocCount++;
+diff --git a/src/nw4r/snd/snd_SeqTrack.cpp b/src/nw4r/snd/snd_SeqTrack.cpp
+index 38fbfaf..ab7daf0 100644
+--- a/src/nw4r/snd/snd_SeqTrack.cpp
++++ b/src/nw4r/snd/snd_SeqTrack.cpp
+@@ -330,7 +330,7 @@ void SeqTrack::FreeAllChannel() {
+ void SeqTrack::ChannelCallbackFunc(Channel* pDropChannel,
+                                    Channel::ChannelCallbackStatus status,
+                                    u32 callbackArg) {
+-    SeqTrack* p = reinterpret_cast<SeqTrack*>(callbackArg);
++    SeqTrack* p = U32_TO_PTR(SeqTrack*, callbackArg);
+ 
+     switch (status) {
+     case Channel::CALLBACK_STATUS_STOPPED:
+@@ -437,7 +437,7 @@ Channel* SeqTrack::NoteOn(int key, int velocity, s32 length, bool tie) {
+ 
+             mPlayer->GetVoiceOutCount(), // voiceOutCount
+             ChannelCallbackFunc,         // channelCallback
+-            reinterpret_cast<u32>(this)  // channelCallbackData
++            PTR_TO_U32(this)  // channelCallbackData
+         };
+ 
+         pChannel = mPlayer->NoteOn(mParserTrackParam.bankNo, info);
+diff --git a/src/nw4r/snd/snd_SoundArchivePlayer.cpp b/src/nw4r/snd/snd_SoundArchivePlayer.cpp
+index f974e6e..bf38083 100644
+--- a/src/nw4r/snd/snd_SoundArchivePlayer.cpp
++++ b/src/nw4r/snd/snd_SoundArchivePlayer.cpp
+@@ -743,7 +743,7 @@ SoundStartable::StartResult SoundArchivePlayer::PrepareSeqImpl(
+         detail::SeqFileReader reader(pSeqBin);
+         pSound->Prepare(reader.GetBaseAddress(), pSeqInfo->dataOffset);
+     } else {
+-        pSound->Prepare(&mSeqLoader, reinterpret_cast<u32>(pSound));
++        pSound->Prepare(&mSeqLoader, PTR_TO_U32(pSound));
+     }
+ 
+     return SoundStartable::START_SUCCESS;
+@@ -836,7 +836,7 @@ int SoundArchivePlayer::SeqLoader::LoadAsync(
+         return detail::StrmPlayer::LOAD_RESULT_FAILED;
+     }
+ 
+-    detail::SeqSound* pSound = reinterpret_cast<detail::SeqSound*>(userData);
++    detail::SeqSound* pSound = U32_TO_PTR(detail::SeqSound*, userData);
+     const SoundArchive& rArchive = mSoundArchivePlayer.GetSoundArchive();
+     u32 id = pSound->GetId();
+ 
+@@ -971,7 +971,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadHeader(
+     const SoundArchive& rArchive = mSoundArchivePlayer.GetSoundArchive();
+ 
+     detail::Task* pTask = new (pBuffer)
+-        StrmHeaderLoadTask(reinterpret_cast<u32>(pPlayer), &rArchive, userData,
++        StrmHeaderLoadTask(PTR_TO_U32(pPlayer), &rArchive, userData,
+                            pCallback, pCallbackArg, &mMutex);
+ 
+     detail::TaskManager::GetInstance().AppendTask(
+@@ -997,7 +997,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadData(
+     detail::Task* pTask = new (detail::TaskManager::GetInstance().Alloc())
+         StrmDataLoadTask(pBuffer, size, offset, channels, blockSize,
+                          blockHeaderOffset, needUpdateAdpcmLoop, pCallback,
+-                         &rArchive, userData, reinterpret_cast<u32>(pPlayer),
++                         &rArchive, userData, PTR_TO_U32(pPlayer),
+                          &mMutex);
+ 
+     detail::TaskManager::GetInstance().AppendTask(
+@@ -1013,7 +1013,7 @@ void SoundArchivePlayer::StrmLoader::Cancel(detail::StrmPlayer* pPlayer,
+ #pragma unused(userData)
+ 
+     detail::TaskManager::GetInstance().CancelByTaskId(
+-        reinterpret_cast<u32>(pPlayer));
++        PTR_TO_U32(pPlayer));
+ }
+ 
+ /******************************************************************************
+diff --git a/src/nw4r/snd/snd_SoundThread.cpp b/src/nw4r/snd/snd_SoundThread.cpp
+index f61cbdc..c5f1a03 100644
+--- a/src/nw4r/snd/snd_SoundThread.cpp
++++ b/src/nw4r/snd/snd_SoundThread.cpp
+@@ -62,7 +62,7 @@ void SoundThread::SoundThreadProc() {
+     while (true) {
+         OSReceiveMessage(&mMsgQueue, &msg, OS_MSG_BLOCKING);
+ 
+-        if (reinterpret_cast<u32>(msg) == MSG_AX_CALLBACK) {
++        if (PTR_ADDR(msg) == MSG_AX_CALLBACK) {
+             ut::detail::AutoLock<OSMutex> lock(mMutex);
+ 
+             u32 start = OSGetTick();
+@@ -91,7 +91,7 @@ void SoundThread::SoundThreadProc() {
+             NW4R_UT_LINKLIST_FOREACH_SAFE (it, mPlayerCallbackList, {
+                 it->OnUpdateVoiceSoundThread();
+             })
+-        } else if (reinterpret_cast<u32>(msg) == MSG_SHUTDOWN) {
++        } else if (PTR_ADDR(msg) == MSG_SHUTDOWN) {
+             break;
+         }
+     }
+diff --git a/src/nw4r/snd/snd_TaskThread.cpp b/src/nw4r/snd/snd_TaskThread.cpp
+index d1f07a8..a12cc34 100644
+--- a/src/nw4r/snd/snd_TaskThread.cpp
++++ b/src/nw4r/snd/snd_TaskThread.cpp
+@@ -43,9 +43,9 @@ void* TaskThread::ThreadFunc(void* pArg) {
+     while (true) {
+         OSReceiveMessage(&p->mMsgQueue, &msg, OS_MSG_BLOCKING);
+ 
+-        if (reinterpret_cast<u32>(msg) == MSG_WAKEUP) {
++        if (PTR_ADDR(msg) == MSG_WAKEUP) {
+             TaskManager::GetInstance().Execute();
+-        } else if (reinterpret_cast<u32>(msg) == MSG_SHUTDOWN) {
++        } else if (PTR_ADDR(msg) == MSG_SHUTDOWN) {
+             break;
+         }
+     }
+diff --git a/src/nw4r/snd/snd_WsdTrack.cpp b/src/nw4r/snd/snd_WsdTrack.cpp
+index e1da5ee..3828177 100644
+--- a/src/nw4r/snd/snd_WsdTrack.cpp
++++ b/src/nw4r/snd/snd_WsdTrack.cpp
+@@ -209,7 +209,7 @@ int WsdTrack::Parse(const WsdCallback* pCallback, u32 callbackArg,
+         Channel* pChannel = Channel::AllocChannel(
+             ut::Min<int>(waveData.numChannels, CHANNEL_MAX),
+             mPlayer->GetVoiceOutCount(), priority, ChannelCallbackFunc,
+-            reinterpret_cast<u32>(this));
++            PTR_TO_U32(this));
+ 
+         if (pChannel == NULL) {
+             return -1;
+@@ -236,7 +236,7 @@ int WsdTrack::Parse(const WsdCallback* pCallback, u32 callbackArg,
+ void WsdTrack::ChannelCallbackFunc(Channel* pDropChannel,
+                                    Channel::ChannelCallbackStatus status,
+                                    u32 callbackArg) {
+-    WsdTrack* p = reinterpret_cast<WsdTrack*>(callbackArg);
++    WsdTrack* p = U32_TO_PTR(WsdTrack*, callbackArg);
+ 
+     if (status == Channel::CALLBACK_STATUS_FINISH) {
+         Channel::FreeChannel(pDropChannel);
+diff --git a/src/nw4r/ut/ut_ArchiveFont.cpp b/src/nw4r/ut/ut_ArchiveFont.cpp
+index a348de8..5b2e240 100644
+--- a/src/nw4r/ut/ut_ArchiveFont.cpp
++++ b/src/nw4r/ut/ut_ArchiveFont.cpp
+@@ -1,3 +1,6 @@
++#ifdef FORECAST_PORT
++#include <port_res.h>
++#endif
+ #include <nw4r/math.h>
+ #include <nw4r/ut.h>
+ 
+@@ -31,6 +34,9 @@ ArchiveFont::~ArchiveFont() {}
+ 
+ u32 ArchiveFont::GetRequireBufferSize(const void* pBrfnt,
+                                       const char* pGlyphGroups) {
++#ifdef FORECAST_PORT
++    port::SwapFontToNative(pBrfnt);
++#endif
+     if (!IsValidResource(pBrfnt, 0x4000)) {
+         return 0;
+     }
+@@ -256,6 +262,9 @@ ArchiveFont::StreamingConstruct(ConstructContext* pContext,
+ 
+ bool ArchiveFont::Construct(void* pBuffer, u32 bufferSize, const void* pBrfnt,
+                             const char* pGlyphGroups) {
++#ifdef FORECAST_PORT
++    port::SwapFontToNative(pBrfnt);
++#endif
+     ConstructContext context;
+     u32 fileSize = static_cast<const BinaryFileHeader*>(pBrfnt)->fileSize;
+ 
+diff --git a/src/nw4r/ut/ut_ArchiveFontBase.cpp b/src/nw4r/ut/ut_ArchiveFontBase.cpp
+index 618200c..d3effe1 100644
+--- a/src/nw4r/ut/ut_ArchiveFontBase.cpp
++++ b/src/nw4r/ut/ut_ArchiveFontBase.cpp
+@@ -293,7 +293,7 @@ ArchiveFontBase::ConstructOpAnalyzeGLGR(ConstructContext* pContext,
+ 
+     // Build the table at the end of the buffer first, then move it into place
+     u16* pAdjust = reinterpret_cast<u16*>(
+-        (reinterpret_cast<u32>(pHeader) + pContext->GetRemain() - adjustSize) &
++        (PTR_ADDR(pHeader) + pContext->GetRemain() - adjustSize) &
+         ~1);
+ 
+     if (pContext->GetRemain() <
+@@ -437,7 +437,7 @@ ArchiveFontBase::ConstructOpAnalyzeTGLP(ConstructContext* pContext,
+ 
+     pContext->pFINF->pGlyph->sheetNum = numSheet;
+ 
+-    u32 sheetOffset = reinterpret_cast<u32>(pContext->pFINF->pGlyph->sheetImage);
++    u32 sheetOffset = PTR32_RAW(pContext->pFINF->pGlyph->sheetImage);
+ 
+     pContext->Align(32);
+     pContext->pFINF->pGlyph->sheetImage = pContext->pCurrent;
+diff --git a/src/nw4r/ut/ut_ResFont.cpp b/src/nw4r/ut/ut_ResFont.cpp
+index 64d4150..780dd08 100644
+--- a/src/nw4r/ut/ut_ResFont.cpp
++++ b/src/nw4r/ut/ut_ResFont.cpp
+@@ -1,13 +1,24 @@
++#ifdef FORECAST_PORT
++#include <port_res.h>
++#endif
+ #include <nw4r/ut.h>
+ 
+ namespace nw4r {
+ namespace ut {
+ namespace {
+ 
++#ifdef FORECAST_PORT
++// Font pointers are 32-bit slots (PTR32): offset in, GX address out.
++template <typename T> inline void ResolveOffset(PortPtr32<T>& rpPtr, void* pBase) {
++    rpPtr = reinterpret_cast<T*>(static_cast<char*>(pBase) +
++                                 static_cast<s32>(rpPtr.addr));
++}
++#else
+ template <typename T> inline void ResolveOffset(T*& rpPtr, void* pBase) {
+     rpPtr = reinterpret_cast<T*>(static_cast<char*>(pBase) +
+                                  reinterpret_cast<s32>(rpPtr));
+ }
++#endif
+ 
+ } // namespace
+ 
+@@ -16,6 +27,9 @@ ResFont::ResFont() {}
+ ResFont::~ResFont() {}
+ 
+ bool ResFont::SetResource(void* pBuffer) {
++#ifdef FORECAST_PORT
++    port::SwapFontToNative(pBuffer);
++#endif
+     BinaryFileHeader* pHeader = static_cast<BinaryFileHeader*>(pBuffer);
+     FontInformation* pInfo = NULL;
+ 
+diff --git a/src/revolution/ARC/arc.c b/src/revolution/ARC/arc.c
+index f3b3aef..0a23820 100644
+--- a/src/revolution/ARC/arc.c
++++ b/src/revolution/ARC/arc.c
+@@ -10,7 +10,7 @@
+ #define FALSE 0
+ 
+ #undef ADD_PTR
+-#define ADD_PTR(ptr, offset) ((void*)((u32)ptr + offset))
++#define ADD_PTR(ptr, offset) ((void*)(PTR_ADDR(ptr) + offset))
+ 
+ #undef IS_DIR
+ #define IS_DIR(fst, entrynum)                                                  \
+@@ -32,10 +32,39 @@ typedef struct FSTEntry {
+     unsigned int nextEntryOrLength; // at 0x8
+ } FSTEntry;
+ 
++#ifdef FORECAST_PORT
++// U8 archives are big-endian. Swap the header and the FST entries in place the
++// first time an archive is seen; the magic tells whether that already happened.
++// File data is left alone (each format is handled where it is parsed).
++static void ARCiSwapToNative(void* arcStart) {
++    unsigned int* words = (unsigned int*)arcStart;
++    unsigned int i, n;
++    FSTEntry* fst;
++
++    if (words[0] != __builtin_bswap32(ARC_FILE_MAGIC)) {
++        return;
++    }
++    for (i = 0; i < 4; i++) {
++        words[i] = __builtin_bswap32(words[i]);
++    }
++    fst = (FSTEntry*)ADD_PTR(arcStart, ((ARCHeader*)arcStart)->fstStart);
++    n = __builtin_bswap32(fst[0].nextEntryOrLength);
++    for (i = 0; i < n; i++) {
++        fst[i].isDirAndStringOff = __builtin_bswap32(fst[i].isDirAndStringOff);
++        fst[i].parentOrPosition = __builtin_bswap32(fst[i].parentOrPosition);
++        fst[i].nextEntryOrLength = __builtin_bswap32(fst[i].nextEntryOrLength);
++    }
++}
++#endif
++
+ BOOL ARCInitHandle(void* arcStart, ARCHandle* handle) {
+     FSTEntry* FSTEntries;
+     ARCHeader* arcHeader = (ARCHeader*)arcStart;
+ 
++#ifdef FORECAST_PORT
++    ARCiSwapToNative(arcStart);
++#endif
++
+     if (arcHeader->magic != ARC_FILE_MAGIC) {
+ #line 74
+         OS_ERROR("ARCInitHandle: bad archive format");
+diff --git a/src/revolution/CX/CXUncomp.c b/src/revolution/CX/CXUncomp.c
+index 95a3150..aabc654 100644
+--- a/src/revolution/CX/CXUncomp.c
++++ b/src/revolution/CX/CXUncomp.c
+@@ -186,7 +186,7 @@ out:
+ // A node holds the offset to its pair of children in the low 6 bits; bits 7
+ // and 6 mark the left and right child as leaves.
+ static inline u8* GetNextNode(const u8* treep, u32 select) {
+-    return (u8*)((((u32)treep >> 1) << 1) + (((*treep & 0x3F) + 1) << 1) + select);
++    return (u8*)(((PTR_ADDR(treep) >> 1) << 1) + (((*treep & 0x3F) + 1) << 1) + select);
+ }
+ 
+ s32 CXReadUncompHuffman(CXUncompContextHuffman* context, const void* data, u32 len) {
+@@ -393,7 +393,7 @@ void CXUncompressHuffman(const void* srcp, void* destp) {
+             u32 treeCheck = *treep;
+ 
+             treeCheck <<= treeShift;
+-            treep = (u8*)((((u32)treep >> 1) << 1) + (((*treep & 0x3F) + 1) << 1) + treeShift);
++            treep = (u8*)(((PTR_ADDR(treep) >> 1) << 1) + (((*treep & 0x3F) + 1) << 1) + treeShift);
+ 
+             if (treeCheck & 0x80) {
+                 destTmp >>= dataBit;
+@@ -442,7 +442,7 @@ BOOL CXiVerifyHuffmanTable_(const void* table, u8 bit) {
+     while (treep < treeEndp) {
+         if ((end_flags[idx / 8] & (1 << (idx % 8))) == 0) {
+             u32 offset = (u32)(((*treep & 0x3F) + 1) << 1);
+-            u8* nodep = (u8*)((((u32)treep >> 1) << 1) + offset);
++            u8* nodep = (u8*)(((PTR_ADDR(treep) >> 1) << 1) + offset);
+ 
+             if (*treep == 0 && idx >= (treeSize * 2)) {
+                 goto next;
+diff --git a/src/revolution/GX/GXAttr.c b/src/revolution/GX/GXAttr.c
+index fa79db3..a1f8cb0 100644
+--- a/src/revolution/GX/GXAttr.c
++++ b/src/revolution/GX/GXAttr.c
+@@ -35,7 +35,7 @@ static void __GXXfVtxSpecs(void) {
+     cmd = 0;
+     cmd = cmd | clr >> 1;
+     cmd = (txc << 3) & ~0xF | cmd;
+-    WGPIPE.i = cmd | nrm << 2;
++    GX_WRITE(i, cmd | nrm << 2);
+ 
+     gxdt->lastWriteWasXF = TRUE;
+ }
+@@ -555,7 +555,7 @@ void __GXSetVAT(void) {
+         flags >>= 1;
+     } while (flags != 0);
+ 
+-    WGPIPE.c = GX_FIFO_CMD_NOOP;
++    GX_WRITE(c, GX_FIFO_CMD_NOOP);
+     gxdt->vatDirtyFlags = 0;
+ }
+ 
+@@ -713,13 +713,13 @@ void GXSetArray(GXAttr attr, const void* base, u8 stride) {
+ 
+     GX_CP_LOAD_REG(GX_BP_REG_SETMODE0_TEX4 | idx,
+                    // Address -> offset?
+-                   (u32)base & ~0xC0000000);
++                   GX_ADDR(base) & ~0xC0000000);
+ 
+     GX_CP_LOAD_REG(GX_BP_REG_SETIMAGE2_TEX4 | idx, stride);
+ }
+ 
+ void GXInvalidateVtxCache(void) {
+-    WGPIPE.c = GX_FIFO_CMD_INVAL_VTX;
++    GX_WRITE(c, GX_FIFO_CMD_INVAL_VTX);
+ }
+ 
+ void GXSetTexCoordGen2(GXTexCoordID id, GXTexGenType type, GXTexGenSrc src,
+diff --git a/src/revolution/GX/GXDisplayList.c b/src/revolution/GX/GXDisplayList.c
+index 82fa713..a2f91f3 100644
+--- a/src/revolution/GX/GXDisplayList.c
++++ b/src/revolution/GX/GXDisplayList.c
+@@ -68,7 +68,7 @@ void GXCallDisplayList(void* list, u32 size) {
+         __GXSendFlushPrim();
+     }
+ 
+-    WGPIPE.c = GX_FIFO_CMD_CALL_DL;
+-    WGPIPE.p = list;
+-    WGPIPE.i = size;
++    GX_WRITE(c, GX_FIFO_CMD_CALL_DL);
++    GX_WRITE(p, list);
++    GX_WRITE(i, size);
+ }
+diff --git a/src/revolution/GX/GXFrameBuf.c b/src/revolution/GX/GXFrameBuf.c
+index 567a011..cab9650 100644
+--- a/src/revolution/GX/GXFrameBuf.c
++++ b/src/revolution/GX/GXFrameBuf.c
+@@ -369,7 +369,7 @@ void GXCopyDisp(void* dest, GXBool clear) {
+     GX_BP_LOAD_REG(gxdt->cpDispSize);
+     GX_BP_LOAD_REG(gxdt->cpDispStride);
+ 
+-    physAddr = (u32)dest & 0x3FFFFFFF;
++    physAddr = GX_ADDR(dest) & 0x3FFFFFFF;
+     cmd = 0;
+     GX_SET_REG_FIELD(cmd, 24, 0, physAddr >> 5);
+     GX_SET_REG_FIELD(cmd, 8, 24, GX_BP_REG_TEXCOPYDST);
+@@ -432,7 +432,7 @@ void GXCopyTex(void* dest, GXBool clear) {
+     GX_BP_LOAD_REG(gxdt->cpTexSize);
+     GX_BP_LOAD_REG(gxdt->cpTexStride);
+ 
+-    physAddr = (u32)dest & 0x3FFFFFFF;
++    physAddr = GX_ADDR(dest) & 0x3FFFFFFF;
+     cmd = 0;
+     GX_SET_REG_FIELD(cmd, 24, 0, physAddr >> 5);
+     GX_SET_REG_FIELD(cmd, 8, 24, GX_BP_REG_TEXCOPYDST);
+diff --git a/src/revolution/GX/GXGeometry.c b/src/revolution/GX/GXGeometry.c
+index 6802854..5693492 100644
+--- a/src/revolution/GX/GXGeometry.c
++++ b/src/revolution/GX/GXGeometry.c
+@@ -137,19 +137,19 @@ void GXBegin(GXPrimitive prim, GXVtxFmt fmt, u16 verts) {
+         __GXSendFlushPrim();
+     }
+ 
+-    WGPIPE.c = fmt | prim;
+-    WGPIPE.s = verts;
++    GX_WRITE(c, fmt | prim);
++    GX_WRITE(s, verts);
+ }
+ 
+ void __GXSendFlushPrim(void) {
+     u32 i;
+     u32 sz = gxdt->vNum * gxdt->vlim;
+ 
+-    WGPIPE.uc = GX_TRIANGLESTRIP;
+-    WGPIPE.us = gxdt->vNum;
++    GX_WRITE(uc, GX_TRIANGLESTRIP);
++    GX_WRITE(us, gxdt->vNum);
+ 
+     for (i = 0; i < sz; i += 4) {
+-        WGPIPE.i = 0;
++        GX_WRITE(i, 0);
+     }
+ 
+     gxdt->lastWriteWasXF = TRUE;
+diff --git a/src/revolution/GX/GXInit.c b/src/revolution/GX/GXInit.c
+index 9379a58..7fd0f50 100644
+--- a/src/revolution/GX/GXInit.c
++++ b/src/revolution/GX/GXInit.c
+@@ -122,14 +122,14 @@ static BOOL __GXShutdown(BOOL final, u32 event) {
+         GXSetDrawSyncCallback(NULL);
+         GXSetDrawDoneCallback(NULL);
+ 
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
+-        WGPIPE.i = 0;
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
++        GX_WRITE(i, 0);
+         PPCSync();
+ 
+         __cpReg[GX_CP_MMIO_CONTROL] = 0;
+@@ -181,7 +181,7 @@ void __GXInitRevisionBits(void) {
+ 
+ static inline void EnableWriteGatherPipe(void) {
+     u32 hid2 = PPCMfhid2();
+-    PPCMtwpar((u32)OSUncachedToPhysical((void*)0xCC008000));
++    PPCMtwpar((u32)PTR_ADDR(OSUncachedToPhysical((void*)0xCC008000)));
+     PPCMthid2(hid2 | 0x40000000);
+ }
+ 
+@@ -201,10 +201,24 @@ GXFifoObj* GXInit(void* base, u32 size) {
+ 
+     GXSetMisc(GX_MT_XF_FLUSH, 0);
+ 
++#ifdef FORECAST_PORT
++    {
++        // No GPU registers: point them at inert memory.
++        static u32 piRegs[0x400];
++        static u16 cpRegs[0x800];
++        static u16 peRegs[0x800];
++        static u16 memRegs[0x800];
++        __piReg = piRegs;
++        __cpReg = cpRegs;
++        __peReg = peRegs;
++        __memReg = memRegs;
++    }
++#else
+     __piReg = (volatile u32*)OSPhysicalToUncached(0x0C003000);
+     __cpReg = (volatile u16*)OSPhysicalToUncached(0x0C000000);
+     __peReg = (volatile u16*)OSPhysicalToUncached(0x0C001000);
+     __memReg = (volatile u16*)OSPhysicalToUncached(0x0C004000);
++#endif
+ 
+     __GXFifoInit();
+     GXInitFifoBase(&FifoObj, base, size);
+diff --git a/src/revolution/GX/GXLight.c b/src/revolution/GX/GXLight.c
+index 2a0b20e..71141cf 100644
+--- a/src/revolution/GX/GXLight.c
++++ b/src/revolution/GX/GXLight.c
+@@ -192,6 +192,23 @@ void GXInitLightColor(GXLightObj* light, GXColor color) {
+     *(u32*)&impl->color = *(u32*)&color;
+ }
+ 
++#ifdef FORECAST_PORT
++// C version of the paired-single writer below: 3 reserved words, the colour,
++// then aa..dirZ (12 floats).
++#define WriteLightObj(dst, src) WriteLightObjC(src)
++static inline void WriteLightObjC(const GXLightObjImpl* src) {
++    const f32* f = &src->aa;
++    int i;
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(ui, (u32)src->color.r << 24 | (u32)src->color.g << 16 |
++                     (u32)src->color.b << 8 | src->color.a);
++    for (i = 0; i < 12; i++) {
++        GX_WRITE(f, f[i]);
++    }
++}
++#else
+ // TODO(kiwi) This inline is fake, and also is a fake match (r6 hardcoded)
+ inline void WriteLightObj(register volatile void* dst,
+                           register const GXLightObjImpl* src) {
+@@ -221,6 +238,7 @@ inline void WriteLightObj(register volatile void* dst,
+         psq_st ps_5, 0(dst), 0, 0
+     )
+ }
++#endif
+ 
+ void GXLoadLightObjImm(const GXLightObj* light, GXLightID id) {
+     const GXLightObjImpl* impl;
+@@ -252,12 +270,12 @@ void GXSetChanAmbColor(GXChannelID chan, GXColor color) {
+     switch (chan) {
+     case GX_COLOR0:
+         ambColor =
+-            GX_BITSET_TRUNC(*(u32*)&gxdt->ambColors[0], 0, 24, *(u32*)&color);
++            GX_BITSET_TRUNC(*(u32*)&gxdt->ambColors[0], 0, 24, GX_COLOR_AS_U32(color));
+         colorId = 0;
+         break;
+     case GX_COLOR1:
+         ambColor =
+-            GX_BITSET_TRUNC(*(u32*)&gxdt->ambColors[1], 0, 24, *(u32*)&color);
++            GX_BITSET_TRUNC(*(u32*)&gxdt->ambColors[1], 0, 24, GX_COLOR_AS_U32(color));
+         colorId = 1;
+         break;
+     case GX_ALPHA0:
+@@ -269,11 +287,11 @@ void GXSetChanAmbColor(GXChannelID chan, GXColor color) {
+         colorId = 1;
+         break;
+     case GX_COLOR0A0:
+-        ambColor = *(u32*)&color;
++        ambColor = GX_COLOR_AS_U32(color);
+         colorId = 0;
+         break;
+     case GX_COLOR1A1:
+-        ambColor = *(u32*)&color;
++        ambColor = GX_COLOR_AS_U32(color);
+         colorId = 1;
+         break;
+     default:
+@@ -291,12 +309,12 @@ void GXSetChanMatColor(GXChannelID chan, GXColor color) {
+     switch (chan) {
+     case GX_COLOR0:
+         matColor =
+-            GX_BITSET_TRUNC(*(u32*)&gxdt->matColors[0], 0, 24, *(u32*)&color);
++            GX_BITSET_TRUNC(*(u32*)&gxdt->matColors[0], 0, 24, GX_COLOR_AS_U32(color));
+         colorId = 0;
+         break;
+     case GX_COLOR1:
+         matColor =
+-            GX_BITSET_TRUNC(*(u32*)&gxdt->matColors[1], 0, 24, *(u32*)&color);
++            GX_BITSET_TRUNC(*(u32*)&gxdt->matColors[1], 0, 24, GX_COLOR_AS_U32(color));
+         colorId = 1;
+         break;
+     case GX_ALPHA0:
+@@ -308,11 +326,11 @@ void GXSetChanMatColor(GXChannelID chan, GXColor color) {
+         colorId = 1;
+         break;
+     case GX_COLOR0A0:
+-        matColor = *(u32*)&color;
++        matColor = GX_COLOR_AS_U32(color);
+         colorId = 0;
+         break;
+     case GX_COLOR1A1:
+-        matColor = *(u32*)&color;
++        matColor = GX_COLOR_AS_U32(color);
+         colorId = 1;
+         break;
+     default:
+diff --git a/src/revolution/GX/GXMisc.c b/src/revolution/GX/GXMisc.c
+index 32f2bcd..3042c9e 100644
+--- a/src/revolution/GX/GXMisc.c
++++ b/src/revolution/GX/GXMisc.c
+@@ -45,14 +45,14 @@ inline void GXFlush(void) {
+     }
+ 
+     // Push the write-gather pipe out with 32 bytes of padding.
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
+-    WGPIPE.i = 0;
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
++    GX_WRITE(i, 0);
+ 
+     PPCSync();
+ }
+diff --git a/src/revolution/GX/GXPixel.c b/src/revolution/GX/GXPixel.c
+index 9de7a83..f7b8fab 100644
+--- a/src/revolution/GX/GXPixel.c
++++ b/src/revolution/GX/GXPixel.c
+@@ -76,7 +76,7 @@ void GXSetFog(GXFogType type, GXColor color, f32 start, f32 end, f32 near,
+     GX_BP_SET_FOGPARAM3_FSEL(fogParamReg3, fsel);
+     GX_BP_SET_OPCODE(fogParamReg3, GX_BP_REG_FOGPARAM3);
+ 
+-    GX_BP_SET_FOGCOLOR_RGB(fogColorReg, *(u32*)&color >> 8);
++    GX_BP_SET_FOGCOLOR_RGB(fogColorReg, GX_COLOR_AS_U32(color) >> 8);
+     GX_BP_SET_OPCODE(fogColorReg, GX_BP_REG_FOGCOLOR);
+ 
+     GX_BP_LOAD_REG(fogParamReg0);
+diff --git a/src/revolution/GX/GXTev.c b/src/revolution/GX/GXTev.c
+index fe4fa9b..2747402 100644
+--- a/src/revolution/GX/GXTev.c
++++ b/src/revolution/GX/GXTev.c
+@@ -134,7 +134,7 @@ void GXSetTevAlphaOp(GXTevStageID stage, GXTevOp op, GXTevBias bias,
+ }
+ 
+ void GXSetTevColor(GXTevRegID id, GXColor color) {
+-    u32 rgba = *(u32*)&color;
++    u32 rgba = GX_COLOR_AS_U32(color);
+     u32 regRA = (GX_BP_REG_TEVREG0LO + id * 2) << GX_BP_OPCODE_SHIFT;
+     u32 regBG = (GX_BP_REG_TEVREG0HI + id * 2) << GX_BP_OPCODE_SHIFT;
+ 
+@@ -154,8 +154,8 @@ void GXSetTevColor(GXTevRegID id, GXColor color) {
+ }
+ 
+ void GXSetTevColorS10(GXTevRegID id, GXColorS10 color) {
+-    u32 redGreen = *(u32*)&color.r;
+-    u32 blueAlpha = *(u32*)&color.b;
++    u32 redGreen = GX_S16_PAIR_AS_U32(&color.r);
++    u32 blueAlpha = GX_S16_PAIR_AS_U32(&color.b);
+     u32 regRA;
+     u32 regBG;
+ 
+@@ -176,7 +176,7 @@ void GXSetTevColorS10(GXTevRegID id, GXColorS10 color) {
+ }
+ 
+ void GXSetTevKColor(GXTevKColorID id, GXColor color) {
+-    u32 rgba = *(u32*)&color;
++    u32 rgba = GX_COLOR_AS_U32(color);
+     u32 regRA = (GX_BP_REG_TEVREG0LO + id * 2) << GX_BP_OPCODE_SHIFT;
+     u32 regBG = (GX_BP_REG_TEVREG0HI + id * 2) << GX_BP_OPCODE_SHIFT;
+ 
+diff --git a/src/revolution/GX/GXTexture.c b/src/revolution/GX/GXTexture.c
+index becaa2e..0c384da 100644
+--- a/src/revolution/GX/GXTexture.c
++++ b/src/revolution/GX/GXTexture.c
+@@ -2,6 +2,18 @@
+ 
+ #include <cstring>
+ 
++#ifdef FORECAST_PORT
++// The public GX objects are fixed-size opaque blocks embedded in resources and
++// other structures; on 64-bit hosts the implementations must still fit.
++#define GX_IMPL_FITS(impl, pub) _Static_assert(sizeof(impl) <= sizeof(pub), #impl " outgrew " #pub)
++GX_IMPL_FITS(GXFifoObjImpl, GXFifoObj);
++GX_IMPL_FITS(GXLightObjImpl, GXLightObj);
++GX_IMPL_FITS(GXTexObjImpl, GXTexObj);
++GX_IMPL_FITS(GXTlutObjImpl, GXTlutObj);
++GX_IMPL_FITS(GXTexRegionImpl, GXTexRegion);
++GX_IMPL_FITS(GXTlutRegionImpl, GXTlutRegion);
++#endif
++
+ // BP register IDs of each texture map's registers (maps 0-3, then 4-7).
+ static u8 GXTexMode0Ids[GX_MAX_TEXMAP] = {0x80, 0x81, 0x82, 0x83,
+                                           0xA0, 0xA1, 0xA2, 0xA3};
+@@ -120,7 +132,7 @@ void GXInitTexObj(GXTexObj* obj, void* image, u16 width, u16 height,
+     GX_SET_REG_FIELD(impl->image0, 10, 0, width - 1);
+     GX_SET_REG_FIELD(impl->image0, 10, 10, height - 1);
+     GX_SET_REG_FIELD(impl->image0, 4, 20, format & 0xF);
+-    GX_SET_REG_FIELD(impl->image3, 24, 0, ((u32)image & 0x3FFFFFFF) >> 5);
++    GX_SET_REG_FIELD(impl->image3, 24, 0, (GX_ADDR(image) & 0x3FFFFFFF) >> 5);
+ 
+     switch (format & 0xF) {
+     case GX_TF_I4:
+@@ -237,12 +249,20 @@ void GXInitTexObjTlut(GXTexObj* obj, u32 tlutName) {
+ 
+ void GXInitTexObjUserData(GXTexObj* obj, void* userData) {
+     GXTexObjImpl* impl = (GXTexObjImpl*)obj;
++#ifdef FORECAST_PORT
++    impl->userData = PTR_TO_U32(userData);
++#else
+     impl->userData = userData;
++#endif
+ }
+ 
+ void* GXGetTexObjUserData(const GXTexObj* obj) {
+     const GXTexObjImpl* impl = (const GXTexObjImpl*)obj;
++#ifdef FORECAST_PORT
++    return U32_TO_PTR(void*, impl->userData);
++#else
+     return impl->userData;
++#endif
+ }
+ 
+ u16 GXGetTexObjWidth(const GXTexObj* obj) {
+@@ -338,7 +358,7 @@ void GXInitTlutObj(GXTlutObj* obj, void* table, GXTlutFmt format,
+ 
+     impl->tlut = 0;
+     GX_SET_REG_FIELD(impl->tlut, 2, 10, format);
+-    GX_SET_REG_FIELD(impl->loadTlut0, 24, 0, ((u32)table & 0x3FFFFFFF) >> 5);
++    GX_SET_REG_FIELD(impl->loadTlut0, 24, 0, (GX_ADDR(table) & 0x3FFFFFFF) >> 5);
+     GX_SET_REG_FIELD(impl->loadTlut0, 8, 24, GX_BP_REG_TMEMTLUTSRC);
+     impl->numEntries = numEntries;
+ }
+diff --git a/src/revolution/GX/GXTransform.c b/src/revolution/GX/GXTransform.c
+index a7f21d9..725e061 100644
+--- a/src/revolution/GX/GXTransform.c
++++ b/src/revolution/GX/GXTransform.c
+@@ -1,5 +1,43 @@
+ #include <revolution/GX.h>
+ 
++#ifdef FORECAST_PORT
++// C versions of the paired-single copies below. dst is the FIFO; the port
++// writes through GX_WRITE instead.
++static inline void LoadProjPS(f32* dst) {
++    int i;
++    for (i = 0; i < 6; i++) {
++        dst[i] = gxdt->proj[i];
++    }
++}
++
++static inline void WriteProjPS(volatile void* dst, const f32* src) {
++    int i;
++    (void)dst;
++    for (i = 0; i < 6; i++) {
++        GX_WRITE(f, src[i]);
++    }
++}
++
++static inline void Copy6Floats(f32* dst, const f32* src) {
++    int i;
++    for (i = 0; i < 6; i++) {
++        dst[i] = src[i];
++    }
++}
++
++static inline void WriteMtxRows(const Mtx src, int rows, int cols) {
++    int r, c;
++    for (r = 0; r < rows; r++) {
++        for (c = 0; c < cols; c++) {
++            GX_WRITE(f, src[r][c]);
++        }
++    }
++}
++
++#define WriteMTXPS4x3(dst, src) WriteMtxRows((src), 3, 4)
++#define WriteMTXPS3x3(dst, src) WriteMtxRows((src), 3, 3)
++#define WriteMTXPS4x2(dst, src) WriteMtxRows((src), 2, 4)
++#else
+ // TODO(kiwi) Fake inline
+ inline void LoadProjPS(register f32* dst) {
+     register f32 ps_0, ps_1, ps_2;
+@@ -41,14 +79,19 @@ inline void Copy6Floats(register f32* dst, register const f32* src) {
+         psq_st ps_2, 16(dst), 0, 0
+     )
+ }
++#endif
+ 
+ void __GXSetProjection(void) {
+     // Temp required to match
++#ifdef FORECAST_PORT
++    volatile void* wgpipe = NULL;
++#else
+     volatile void* wgpipe = &WGPIPE;
++#endif
+ 
+     GX_XF_LOAD_REGS(ARRAY_SIZE(gxdt->proj), GX_XF_REG_PROJECTIONA);
+     WriteProjPS(wgpipe, gxdt->proj);
+-    WGPIPE.i = gxdt->projType;
++    GX_WRITE(i, gxdt->projType);
+ }
+ 
+ void GXSetProjection(const Mtx44 proj, GXProjectionType type) {
+@@ -80,7 +123,13 @@ inline void GXGetProjectionv(f32 proj[GX_PROJECTION_SZ]) {
+     proj[0] = gxdt->projType != GX_PERSPECTIVE ? 1.0f : 0.0f;
+     LoadProjPS(proj + 1);
+ }
++#ifdef FORECAST_PORT
++// C99 inline: this declaration makes the unit emit the external definition
++// that ef calls.
++extern void GXGetProjectionv(f32 proj[GX_PROJECTION_SZ]);
++#endif
+ 
++#ifndef FORECAST_PORT
+ inline void WriteMTXPS4x3(register volatile void* dst, register const Mtx src) {
+     register f32 ps_0, ps_1, ps_2, ps_3, ps_4, ps_5;
+ 
+@@ -136,6 +185,7 @@ inline void WriteMTXPS4x2(register volatile void* dst, register const Mtx src) {
+         psq_st ps_3, 0(dst),  0, 0
+     )
+ }
++#endif
+ 
+ void GXLoadPosMtxImm(const Mtx mtx, u32 id) {
+     // Position matrices are 4x3
+@@ -204,12 +254,12 @@ void __GXSetViewport(void) {
+     f = far + gxdt->offsetZ;
+ 
+     GX_XF_LOAD_REGS(6 - 1, GX_XF_REG_SCALEX);
+-    WGPIPE.f = a;
+-    WGPIPE.f = b;
+-    WGPIPE.f = c;
+-    WGPIPE.f = d;
+-    WGPIPE.f = e;
+-    WGPIPE.f = f;
++    GX_WRITE(f, a);
++    GX_WRITE(f, b);
++    GX_WRITE(f, c);
++    GX_WRITE(f, d);
++    GX_WRITE(f, e);
++    GX_WRITE(f, f);
+ }
+ 
+ void GXSetViewportJitter(f32 ox, f32 oy, f32 sx, f32 sy, f32 near, f32 far,
+diff --git a/src/revolution/TPL/TPL.c b/src/revolution/TPL/TPL.c
+index 9ee0eeb..bca61bf 100644
+--- a/src/revolution/TPL/TPL.c
++++ b/src/revolution/TPL/TPL.c
+@@ -3,6 +3,107 @@
+ 
+ #define TPL_VERSION 2142000
+ 
++#ifdef FORECAST_PORT
++// Port (64-bit hosts): the palette's pointer members are 32-bit slots (PTR32,
++// port_ptr32.h), which this C file sees as u32. Before binding they hold file
++// offsets from the palette; binding stores GX addresses (port_mem.h) instead.
++//
++// TPL files are big-endian. The palette header, descriptor table and texture /
++// CLUT headers are swapped in place before binding; the version number tells
++// whether that already happened. Texel and CLUT data stay as they are (the GX
++// layer reads them in their Wii layout).
++#define TPL_PTR(T, addr) ((T*)port_gx_ptr(addr))
++
++static u32 TPLiSwap32(u32 v) { return __builtin_bswap32(v); }
++static u16 TPLiSwap16(u16 v) { return __builtin_bswap16(v); }
++
++static void TPLiSwapToNative(TPLPalette* pal) {
++    u32 i, j;
++    u32* w;
++    TPLDescriptor* desc;
++
++    if (pal->versionNumber != TPLiSwap32(TPL_VERSION)) {
++        return;
++    }
++    pal->versionNumber = TPLiSwap32(pal->versionNumber);
++    pal->numDescriptors = TPLiSwap32(pal->numDescriptors);
++    pal->descriptorArray = TPLiSwap32(pal->descriptorArray);
++
++    desc = (TPLDescriptor*)((char*)pal + pal->descriptorArray);
++    for (i = 0; i < pal->numDescriptors; i++) {
++        BOOL seenTex = FALSE, seenClut = FALSE;
++        desc[i].textureHeader = TPLiSwap32(desc[i].textureHeader);
++        desc[i].CLUTHeader = TPLiSwap32(desc[i].CLUTHeader);
++        // Headers shared by several descriptors are swapped once.
++        for (j = 0; j < i; j++) {
++            seenTex |= desc[j].textureHeader == desc[i].textureHeader;
++            seenClut |= desc[j].CLUTHeader == desc[i].CLUTHeader;
++        }
++        if (desc[i].textureHeader != 0 && !seenTex) {
++            TPLHeader* h = (TPLHeader*)((char*)pal + desc[i].textureHeader);
++            h->height = TPLiSwap16(h->height);
++            h->width = TPLiSwap16(h->width);
++            // format, data, wrapS, wrapT, minFilter, magFilter, LODBias
++            for (w = (u32*)&h->format; w <= (u32*)&h->LODBias; w++) {
++                *w = TPLiSwap32(*w);
++            }
++        }
++        if (desc[i].CLUTHeader != 0 && !seenClut) {
++            TPLClutHeader* c = (TPLClutHeader*)((char*)pal + desc[i].CLUTHeader);
++            c->numEntries = TPLiSwap16(c->numEntries);
++            c->format = (GXTlutFmt)TPLiSwap32((u32)c->format);
++            c->data = TPLiSwap32(c->data);
++        }
++    }
++}
++
++void TPLBind(TPLPalette* pal) {
++    u32 i;
++    TPLDescriptor* desc;
++
++    TPLiSwapToNative(pal);
++    OS_ASSERT(pal->versionNumber == TPL_VERSION, "invalid version number for texture palette");
++
++    desc = (TPLDescriptor*)((char*)pal + pal->descriptorArray);
++    pal->descriptorArray = port_gx_addr(desc);
++
++    for (i = 0; i < pal->numDescriptors; i++) {
++        if (desc[i].textureHeader != 0) {
++            TPLHeader* h = (TPLHeader*)((char*)pal + desc[i].textureHeader);
++            desc[i].textureHeader = port_gx_addr(h);
++            if (!h->unpacked) {
++                h->data = port_gx_addr((char*)pal + h->data);
++                h->unpacked = TRUE;
++            }
++        }
++        if (desc[i].CLUTHeader != 0) {
++            TPLClutHeader* c = (TPLClutHeader*)((char*)pal + desc[i].CLUTHeader);
++            desc[i].CLUTHeader = port_gx_addr(c);
++            if (!c->unpacked) {
++                c->data = port_gx_addr((char*)pal + c->data);
++                c->unpacked = TRUE;
++            }
++        }
++    }
++}
++
++TPLDescriptor* TPLGet(TPLPalette* pal, u32 id) {
++    return &TPL_PTR(TPLDescriptor, pal->descriptorArray)[id % pal->numDescriptors];
++}
++
++void TPLGetGXTexObjFromPalette(TPLPalette* pal, GXTexObj* texObj, u32 id) {
++    TPLDescriptor* descriptor = TPLGet(pal, id);
++    TPLHeader* h = TPL_PTR(TPLHeader, descriptor->textureHeader);
++    GXBool hasMipMap = h->minLOD == h->maxLOD ? GX_FALSE : GX_TRUE;
++
++    GXInitTexObj(texObj, TPL_PTR(char, h->data), h->width, h->height, (GXTexFmt)h->format, h->wrapS, h->wrapT,
++                 hasMipMap);
++    GXInitTexObjLOD(texObj, h->minFilter, h->magFilter, h->minLOD, h->maxLOD, h->LODBias, GX_FALSE,
++                    h->edgeLODEnable, GX_ANISO_1);
++}
++
++#else
++
+ void TPLBind(TPLPalette* pal) {
+     u16 i;
+ 
+@@ -64,3 +165,5 @@ void TPLGetGXTexObjFromPalette(TPLPalette* pal, GXTexObj* texObj, u32 id) {
+                     descriptor->textureHeader->LODBias, GX_FALSE, descriptor->textureHeader->edgeLODEnable,
+                     GX_ANISO_1);
+ }
++
++#endif // FORECAST_PORT

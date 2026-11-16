@@ -1,0 +1,2 @@
+// C-only: MSL lets C sources include <cstdio>; map it to <stdio.h>.
+#include <stdio.h>

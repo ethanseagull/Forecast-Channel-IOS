@@ -1,0 +1,2 @@
+// C-only: MSL lets C sources include <cstring>; map it to <string.h>.
+#include <string.h>

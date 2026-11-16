@@ -1,0 +1,19 @@
+# Nintendo files: never commit
+HAFE_v7/
+*.app
+*.wad
+*.tmd
+cetk
+textures/
+
+# Decomp checkout (set up by tools/setup_decomp, patched locally)
+forecast-decomp/
+
+# Prebuilt SDL3 for Windows (downloaded locally; CI builds its own)
+third_party/SDL3/
+
+# Build output
+build/
+build_log.txt
+out/
+*.ipa
