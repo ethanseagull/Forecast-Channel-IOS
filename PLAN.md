@@ -63,8 +63,10 @@ iOS (Metal) unchanged. iOS then only adds packaging, touch, file import and netw
    addresses in 32-bit fields. Plan: all game heaps live in one reserved arena under 4 GB and
    GX addresses are offsets into it, with a small table for static data. Audit structs that
    overlay file data for pointer members.
-2. **Renderer.** TEV stages -> generated fragment shaders (full 16 stages, unlike PICA's 6),
-   indirect/bump texturing for the globe's emboss, EFB copies -> render-to-texture.
+2. **Renderer.** One precompiled TEV ubershader that decodes the raw BP registers at run time
+   (all 16 stages; no shader compiler on the device), vertices transformed on the CPU,
+   EFB copies -> GPU textures. Still to do: indirect/bump texturing for the globe's emboss,
+   fog, z textures.
 3. **Texture replacement.** Hash each texture the way Dolphin does (XXH64 of the texel data, plus
    the palette for paletted formats) and load the matching PNG from the WiiPC packs.
 4. **Input: touch, no cursor.** The channel's UI is built on the Wii pointer (hit tests,
@@ -119,7 +121,7 @@ as an artifact, and the user's sideloading tool signs and installs it from Windo
 ### Milestone 1: done (2026-11-16)
 Windows x64 build (`tools\build_windows.bat`) boots the channel: SystemInit, the weather scene,
 5 layouts and 4 fonts load, 60 fps, no crash; it waits on the "connecting" screen because
-NWC24 is a stub. Draws are counted, not rendered (`port/gx/gx_null.cpp`).
+NWC24 is a stub.
 
 Run it: `tools\extract_assets.ps1` once, then `build\windows\forecast.exe` (log:
 `build\windows\data\boot.log`; crashes write a stack to `crash.txt`, symbolize with
@@ -141,12 +143,37 @@ How the 64-bit problems are handled (details in `patches/decomp-port.patch`, all
 - `lyt::Pane` name / user data / visibility and `TextBox` text colors go through the
   members on the port; the Wii build keeps the original hard-coded offsets.
 
+### Milestone 2: renderer done (2026-11-16); main menu waits on milestone 3
+The 2D layouts draw on SDL3 GPU (D3D12 on Windows) and respond to touch. Verified on the
+screens reachable without forecast data: the WiiConnect24 and "Unable to download" error
+screens (FORE000005) render correctly (gradients, rounded panels, fonts) and the button
+highlights on touch. The weather scenes themselves need milestone 3's data.
+- `port/gx/gx_xform.cpp`: XF on the CPU (matrices, projection, viewport, lighting, texgens,
+  dual-tex), primitives -> triangle lists in SDL GPU clip space.
+- `port/gx/gx_sdl.cpp`: records draws (pipeline from blend/z/cull state, 8 texture maps,
+  scissor, TEV registers), replays them into the EFB (a render target at 1-4x the Wii's size)
+  at GXCopyDisp, scales it to a 16:9 rectangle. GXCopyTex -> GPU textures looked up by
+  destination address (the scene fades capture the screen this way).
+- `port/gx/shaders/gx_ps.hlsl`: the TEV ubershader (Dolphin's integer TEV math, konst, swap
+  tables, compare modes, alpha test); `toolsuild_shaders.bat` compiles it with the Windows
+  SDK's dxc into the committed `gx_shaders_dxil.h`. iOS (milestone 6) needs a SPIR-V -> MSL
+  step on the macOS runner.
+- `port/gx/gx_tex.cpp`: Wii texture formats -> RGBA8, cached and re-hashed after
+  GXInvalidateTexAll. Every format in the assets checked by eye (`tools/tex_test`); RGB565
+  and the CI formats only by synthetic tests (no asset uses them).
+- `port/sdk/kpad.c`: a touch (left mouse button) is the Wii pointer: one frame of hover, then
+  A held; no touch = pointer off screen. `SCGetIdleMode` reports WiiConnect24 on.
+- Debug switches: `FORECAST_DUMP_FRAME=n[,m]` saves the EFB as `efb_<n>.bmp`;
+  `FORECAST_TOUCH=frame:x:y:frames` simulates a touch; `FORECAST_HIDDEN=1` hides the window.
+- Not yet: indirect texturing, fog, z textures, logic ops (drawn as copy), EFB copy format
+  conversion (copied as RGBA), destination alpha. Each logs once when first used.
+
 Off on the port (each marked in the source):
-- Cursor sparkle effect: dropped for good (touch devices draw no cursor; `Scene.cpp`
-  never loads breff/breft). The cursor sprite drawing goes the same way in milestone 2.
+- Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
+  plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.
 - Sound, temporarily (brsar not converted, AX not ported; `Sound.cpp`, `SoundManager.cpp`).
 
-### Next (from `notes/64bit-audit.md`, before or during milestone 2)
+### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
 - snd TaskManager 0x40-byte units vs larger 64-bit tasks (when sound comes back).
 - (ef relocation items: moot, the cursor effect is dropped.)

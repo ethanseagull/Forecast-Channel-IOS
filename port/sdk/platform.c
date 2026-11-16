@@ -20,7 +20,14 @@ bool port_platform_init(void) {
         return false;
     }
     // 16:9 at twice the Wii's 608-wide safe frame; resizable.
-    sWindow = SDL_CreateWindow("Forecast Channel", 1280, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    // FORECAST_HIDDEN=1 (automated test runs): no visible window; frames are
+    // still rendered (and can be dumped with FORECAST_DUMP_FRAME).
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    const char* hidden = SDL_getenv("FORECAST_HIDDEN");
+    if (hidden != NULL && hidden[0] == '1') {
+        flags |= SDL_WINDOW_HIDDEN;
+    }
+    sWindow = SDL_CreateWindow("Forecast Channel", 1280, 720, flags);
     if (sWindow == NULL) {
         port_log("SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
@@ -62,6 +69,28 @@ uint32_t port_platform_frame(void) {
             break;
         default:
             break;
+        }
+    }
+
+    // Debugging: FORECAST_TOUCH=frame:x:y:frames touches the window at (x, y)
+    // (0-1 of the window size) for that many frames.
+    static const char* sTouch;
+    static bool sTouchRead;
+    if (!sTouchRead) {
+        sTouch = SDL_getenv("FORECAST_TOUCH");
+        sTouchRead = true;
+    }
+    if (sTouch != NULL) {
+        unsigned start = 0, len = 0;
+        float tx = 0, ty = 0;
+        if (SDL_sscanf(sTouch, "%u:%f:%f:%u", &start, &tx, &ty, &len) == 4 && sFrame + 1 >= start &&
+            sFrame + 1 <= start + len) {
+            int w = 0, h = 0;
+            SDL_GetWindowSize(sWindow, &w, &h);
+            sPointerX = tx * (float)w;
+            sPointerY = ty * (float)h;
+            sPointerInside = true;
+            sPointerDown = sFrame + 1 < start + len;
         }
     }
 

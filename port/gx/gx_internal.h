@@ -34,6 +34,8 @@ void port_gx_present(void);
 #ifdef __cplusplus
 }
 
+#include <vector>
+
 // --- register state (gx_cp.cpp) ----------------------------------------------
 
 struct GXRegs {
@@ -104,6 +106,70 @@ struct GXVertexIn {
 
 // Called by the parser with a primitive's decoded vertices.
 void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count);
+
+// One vertex after the CPU transform (gx_xform.cpp), as the vertex shader
+// reads it (shaders/gx_vs.hlsl): clip-space position in SDL GPU's convention
+// (NDC +Y up, Z 0..1), the two rasterized colour channels (0..1, already lit
+// and clamped), and the 8 texture coordinates (s, t, q; the pixel shader
+// samples at (s/q, t/q), normalized, t = 0 at the top row).
+// Vertex attribute locations: 0 pos, 1 clr0, 2 clr1, 3..10 tex0..tex7.
+struct GXVtxOut {
+    f32 pos[4];
+    f32 clr[2][4];
+    f32 tex[8][3];
+};
+
+// The EFB size the game renders at (the display copy's source size).
+void gx_efb_size(u32* w, u32* h);
+
+// Transforms a primitive (gx_xform.cpp) and appends it to out as a triangle
+// list. Returns the number of vertices appended.
+u32 gx_xform_primitive(u32 primitive, const GXVertexIn* in, u32 count, std::vector<GXVtxOut>& out);
+
+// --- the TEV pixel shader's uniform block (shaders/gx_ps.hlsl) -----------------
+//
+// Fragment uniform slot 0 (HLSL: cbuffer at register(b0, space3)). Raw BP
+// register values: the ubershader decodes the bit fields itself. Laid out in
+// 16-byte rows to match HLSL cbuffer packing (u32 x[16] <-> uint4 x[4]).
+struct GXTevUniforms {
+    u32 colorEnv[16]; // BP 0xC0 + 2n: TEV colour combiner of stage n
+    u32 alphaEnv[16]; // BP 0xC1 + 2n: TEV alpha combiner of stage n
+    u32 tevOrder[8];  // BP 0x28-0x2F: texmap / texcoord / ras channel, 2 stages each
+    u32 ksel[8];      // BP 0xF6-0xFD: konst selects and swap tables
+    s32 tevReg[4][4]; // [PREV, C0, C1, C2][R, G, B, A], signed 11-bit as on the GPU
+    s32 konst[4][4];  // [K0..K3][R, G, B, A], 0-255
+    u32 genMode;      // BP 0x00: number of TEV stages (bits 10-13, + 1) etc.
+    u32 alphaCompare; // BP 0xF3
+    u32 texBound;     // bit n: texture map n has a real texture bound (else white)
+    u32 pad;
+};
+
+// --- textures (gx_tex.cpp) ---------------------------------------------------
+//
+// The texture loaded into a texture map (BP 0x80-0xBB), decoded to RGBA8.
+// Decoded images are cached by what the registers describe; after
+// GXInvalidateTexAll (BP 0x66) an image is re-hashed on its next use and
+// re-decoded if its bytes (or its TLUT) changed.
+struct GXTexDesc {
+    // Identifies the image and its contents: a new version means new pixels.
+    // Versions are unique across all images.
+    u64 key;
+    u32 version;
+    u32 width, height;
+    // width * height pixels, bytes R, G, B, A, top row first. Valid until the
+    // next gx_tex_get or gx_tex_frame_end call.
+    const u8* rgba;
+    // Sampling state from the map's mode registers (it can differ per use of
+    // the same image). Wrap: 0 clamp, 1 repeat, 2 mirror.
+    u8 wrapS, wrapT;
+    u8 minLinear, magLinear;
+};
+
+// Looks up (decoding if needed) the texture in map 0-7. False if the map has
+// no usable texture.
+bool gx_tex_get(int map, GXTexDesc* out);
+// Once per frame: drops images unused for a while and logs statistics.
+void gx_tex_frame_end(void);
 // BP 0x52: an EFB copy. toTexture distinguishes GXCopyTex from GXCopyDisp.
 void gx_efb_copy(u32 command);
 // BP 0x66: textures in memory may have changed.

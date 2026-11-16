@@ -30,12 +30,15 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main**: milestone 1 (`33cf20c`) plus docs commits; `git log` for the tip.
-  No remote, nothing pushed.
-- **Milestone 1 done.** `build\windows\forecast.exe` boots: SystemInit, weather
-  scene, 5 layouts + 4 fonts, 60 fps, no crash; waits on the "connecting"
-  screen (NWC24 is a stub). Draws are counted, not rendered
-  (`port/gx/gx_null.cpp`). Sound is off until its archive is converted
+- **main**: milestones 1 and 2; `git log` for the tip. No remote, nothing
+  pushed.
+- **Milestone 2 renderer done** (`PLAN.md` "Milestone 2"). `build\windows\forecast.exe`
+  draws on SDL3 GPU (D3D12) and takes touch (left mouse) as the Wii pointer. It
+  stops on the channel's "Unable to download the latest information"
+  (FORE000005) screen, because NWC24 is a stub: the weather scenes need
+  milestone 3. Automated runs: `FORECAST_HIDDEN=1`, `FORECAST_DUMP_FRAME=n`
+  (writes `efb_<n>.bmp`), `FORECAST_TOUCH=frame:x:y:frames`. Shaders:
+  `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound is off until its archive is converted
   (`Sound.cpp`, `SoundManager.cpp`, `WeatherScene.cpp`). The cursor effect is
   dropped for good (`Scene.cpp`): the targets are touchscreens, so no cursor
   is drawn; touch drives the Wii pointer underneath (`PLAN.md` item 4).
@@ -91,31 +94,30 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 
 ## Open work, in priority order
 
-1. **Milestone 2: draw the 2D layouts.** Replace `gx_null.cpp` with an SDL3 GPU
-   backend: vertex transform from XF state, TEV stages -> generated shaders,
-   texture decode (forecast-3ds `port/gx/gx_tex.cpp` has decoders for RGB5A3,
-   I4/I8/IA4/IA8, CMPR; its citro3d upload is not reusable), EFB copies.
-   Present on GXCopyDisp (`gx_efb_copy`). Input: implement KPADRead so a
-   touch (mouse button on Windows) is the Wii pointer with A held; no touch =
-   pointer off screen (`port_pointer()` in `platform.c` is ready). Stop the
-   cursor sprite from being drawn (`Cursor` in `Scene.cpp`).
-2. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
+1. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
-3. **Milestone 3: forecast data.** NWC24/VF are stubs; fetch `forecast.bin` /
+2. **Milestone 3: forecast data.** NWC24/VF are stubs; fetch `forecast.bin` /
    `short.bin` from `http://fore.wiilink24.com/...` and feed them where the
    channel's VF/NWC24 reads expect them. `forecast.bin` parsing is 64-bit safe
-   (offsets only, per the audit).
-4. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
+   (offsets only, per the audit). The weather scenes are also the renderer's
+   first real test beyond the error screens: dump frames
+   (`FORECAST_DUMP_FRAME`) and compare with Dolphin.
+   Renderer gaps that may show up there or with the globe: indirect texturing
+   (emboss), fog, z textures, EFB-copy format conversion, logic ops. Each logs
+   once. Every image in use is also re-hashed each frame, because the channel
+   calls GXInvalidateTexAll every frame (about 80 KB a frame now); profile
+   that once the globe draws.
+3. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
    arrays (globe, milestone 4); snd TaskManager unit size (with sound); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
    items are moot (cursor effect dropped).
-5. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
+4. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
    remove the port skips.
-6. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
+5. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
    runner, unsigned .ipa artifact, SDL touch events into the same pointer path
    as the mouse, Files-app import of the channel contents, ATS exception for
    WiiLink's plain HTTP. Watch for `long` (64-bit on iOS, 32 on Windows) in
    anything the audit missed.
-7. **Touch design** (milestone 7, with the iPhone layout): replacements for
+6. **Touch design** (milestone 7, with the iPhone layout): replacements for
    hover highlights, B (back), +/- (globe zoom: pinch), 1/2; bigger hit areas.

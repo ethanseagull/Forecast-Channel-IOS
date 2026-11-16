@@ -55,6 +55,14 @@ u32 SCGetSimpleAddressID(void) {
     return sAddressID;
 }
 
+// WiiConnect24 on (the channel refuses to start without it); the slot light
+// has no meaning here.
+BOOL SCGetIdleMode(SCIdleModeInfo* mode) {
+    mode->wc24 = 1;
+    mode->slotLight = 0;
+    return TRUE;
+}
+
 u8 SCGetAspectRatio(void) { return SC_ASPECT_WIDE; }
 
 u8 SCGetProgressiveMode(void) { return 1; }

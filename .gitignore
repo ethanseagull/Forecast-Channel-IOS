@@ -17,3 +17,6 @@ build/
 build_log.txt
 out/
 *.ipa
+
+# Python caches
+__pycache__/

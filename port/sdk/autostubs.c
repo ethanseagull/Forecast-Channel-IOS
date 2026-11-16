@@ -370,36 +370,6 @@ long long port_stub_71(void) {
     port_stub_hit("HBMStartBlackOut");
     return 0;
 }
-long long port_stub_72(void) __asm__("KPADEnableDPD");
-long long port_stub_72(void) {
-    port_stub_hit("KPADEnableDPD");
-    return 0;
-}
-long long port_stub_73(void) __asm__("KPADGetProjectionPos");
-long long port_stub_73(void) {
-    port_stub_hit("KPADGetProjectionPos");
-    return 0;
-}
-long long port_stub_74(void) __asm__("KPADInit");
-long long port_stub_74(void) {
-    port_stub_hit("KPADInit");
-    return 0;
-}
-long long port_stub_75(void) __asm__("KPADRead");
-long long port_stub_75(void) {
-    port_stub_hit("KPADRead");
-    return 0;
-}
-long long port_stub_76(void) __asm__("KPADSetDistParam");
-long long port_stub_76(void) {
-    port_stub_hit("KPADSetDistParam");
-    return 0;
-}
-long long port_stub_77(void) __asm__("KPADSetPosParam");
-long long port_stub_77(void) {
-    port_stub_hit("KPADSetPosParam");
-    return 0;
-}
 long long port_stub_78(void) __asm__("LCDisable");
 long long port_stub_78(void) {
     port_stub_hit("LCDisable");
@@ -663,11 +633,6 @@ long long port_stub_129(void) {
 long long port_stub_130(void) __asm__("SCFlushSync");
 long long port_stub_130(void) {
     port_stub_hit("SCFlushSync");
-    return 0;
-}
-long long port_stub_131(void) __asm__("SCGetIdleMode");
-long long port_stub_131(void) {
-    port_stub_hit("SCGetIdleMode");
     return 0;
 }
 long long port_stub_132(void) __asm__("SCGetSoundMode");

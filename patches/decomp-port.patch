@@ -1428,7 +1428,7 @@ index 7e3093c..72772f3 100644
  }
  
 diff --git a/src/Scene.cpp b/src/Scene.cpp
-index a3424f2..35c99ad 100644
+index a3424f2..ac48c6d 100644
 --- a/src/Scene.cpp
 +++ b/src/Scene.cpp
 @@ -56,6 +56,11 @@ public:
@@ -1480,6 +1480,21 @@ index a3424f2..35c99ad 100644
          mEffectReady = TRUE;
          resource->Add((u8*)mEffectData);
          resource->AddTexture((u8*)mEffectTexData);
+@@ -259,6 +283,14 @@ void Cursor::Set(s32 chan, s32 type) {
+     }
+ 
+     mType[chan] = type;
++#ifdef FORECAST_PORT
++    // Touchscreens draw no cursor: the pointer is the finger. (Type 5 is the
++    // plain hand texture; the other types are effects, which the port never
++    // loads.)
++    if (type == 5) {
++        return;
++    }
++#endif
+     if (type != 5) {
+         return;
+     }
 diff --git a/src/SceneBase.cpp b/src/SceneBase.cpp
 index c8a3452..8161592 100644
 --- a/src/SceneBase.cpp
