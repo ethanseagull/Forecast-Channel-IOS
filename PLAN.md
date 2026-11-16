@@ -168,6 +168,29 @@ highlights on touch. The weather scenes themselves need milestone 3's data.
 - Not yet: indirect texturing, fog, z textures, logic ops (drawn as copy), EFB copy format
   conversion (copied as RGBA), destination alpha. Each logs once when first used.
 
+### Milestone 3: done (2026-11-16)
+Real weather from WiiLink on the 2D screens: first-run date check, region and city lists
+(names from `forecast.bin`), then the forecast pages (current conditions, today, the week...).
+- `port/sdk/nwc24.c`: the NWC24 download-task calls and the VF file calls the channel uses.
+  `NWC24ExecDownloadTask` is an HTTP GET (`port/sdk/http.c`, raw sockets, HTTP/1.0, so no
+  iOS ATS exception); Nintendo's `weather.wapp.wii.com` becomes `fore.wiilink24.com`
+  (`FORECAST_WC24_HOST` overrides). The 0x140-byte signed header is stripped (signature not
+  checked) and the LZ payload stored as `<data>/wc24/<id>.bin` (+ `.time`); if a download
+  fails, the last good copy is used.
+- `port/res/wc24_swap.cpp`: forecast.bin / short.bin to native byte order after the
+  channel decompresses them (CRC checked on the original bytes, then recomputed, so the
+  channel's own check still holds); UTF-16 strings found through their offsets.
+- `Connect.cpp`: the short.bin buffer is 64 KB on the port. WiiLink's USA short.bin
+  (21708 bytes decompressed) has outgrown the original 0x5000; the same size sits in the
+  user's Dolphin copy, so WiiLink's patched channel must enlarge it too.
+- `macros.h` `GXCOLOR_U32`: the channel reads GXColor structs as u32 for GXColor1u32
+  (`DrawUtil.cpp`, `System.cpp`); on little-endian hosts that reversed the bytes (the list
+  rows came out opaque cyan instead of translucent white).
+- `WiiConnect24.cpp`: the original pads the downloaded size by writing up to 3 bytes
+  `outSize` bytes past the task struct; skipped on the port.
+- The globe is skipped while `earth.brres` cannot be read (milestone 4): `SimpleModel` has no
+  scene model and the globe code checks for it.
+
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.

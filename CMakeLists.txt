@@ -123,6 +123,8 @@ target_include_directories(forecast PRIVATE
 )
 target_link_libraries(forecast PRIVATE SDL3::SDL3)
 if(WIN32)
+    # Sockets for the WiiConnect24 downloads (port/sdk/http.c).
+    target_link_libraries(forecast PRIVATE ws2_32)
     # Report every unresolved symbol with its real name (tools/gen_stubs.py).
     target_link_options(forecast PRIVATE "LINKER:/errorlimit:0" "LINKER:/demangle:no")
 endif()

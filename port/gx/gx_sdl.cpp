@@ -407,6 +407,30 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     if (gx_bits(gx.bp[0xF5], 0, 2) != 0) {
         WARN_ONCE("gx: z textures not supported\n");
     }
+    // Debugging: FORECAST_LOG_DRAWS=n logs every draw of frame n.
+    static const char* sLogFrame = SDL_getenv("FORECAST_LOG_DRAWS");
+    if (sLogFrame != NULL && (u32)SDL_atoi(sLogFrame) == sFrame + 1) {
+        const GXVtxOut& v0 = sVerts[d.first];
+        port_log("draw %u: prim %02x n %u pipe %08x stages %u tex %02x/%02x chans %u gens %u "
+                 "clr0 %.2f %.2f %.2f %.2f pos %.3f %.3f %.3f %.3f\n",
+                 (unsigned)sDraws.size(), (unsigned)primitive, (unsigned)count, (unsigned)pipe_key().bits,
+                 (unsigned)(gx_bits(gx.bp[0x00], 10, 4) + 1), (unsigned)used, (unsigned)d.tev.texBound,
+                 (unsigned)(gx.xfReg[0x09] & 3), (unsigned)(gx.xfReg[0x3F] & 15), v0.clr[0][0], v0.clr[0][1],
+                 v0.clr[0][2], v0.clr[0][3], v0.pos[0], v0.pos[1], v0.pos[2], v0.pos[3]);
+        for (u32 s = 0; s <= gx_bits(gx.bp[0x00], 10, 4); s++) {
+            port_log("    stage %u: order %03x color %06x alpha %06x ksel %06x\n", (unsigned)s,
+                     (unsigned)gx_bits(d.tev.tevOrder[s / 2], (s & 1) * 12, 12), (unsigned)d.tev.colorEnv[s],
+                     (unsigned)d.tev.alphaEnv[s], (unsigned)d.tev.ksel[s / 2]);
+        }
+        port_log("    regs prev %d %d %d %d c0 %d %d %d %d c1 %d %d %d %d k0 %d %d %d %d k1 %d %d %d %d "
+                 "chan0 ctrl %06x/%06x mat %08x amb %08x\n",
+                 d.tev.tevReg[0][0], d.tev.tevReg[0][1], d.tev.tevReg[0][2], d.tev.tevReg[0][3], d.tev.tevReg[1][0],
+                 d.tev.tevReg[1][1], d.tev.tevReg[1][2], d.tev.tevReg[1][3], d.tev.tevReg[2][0], d.tev.tevReg[2][1],
+                 d.tev.tevReg[2][2], d.tev.tevReg[2][3], d.tev.konst[0][0], d.tev.konst[0][1], d.tev.konst[0][2],
+                 d.tev.konst[0][3], d.tev.konst[1][0], d.tev.konst[1][1], d.tev.konst[1][2], d.tev.konst[1][3],
+                 (unsigned)gx.xfReg[0x0E], (unsigned)gx.xfReg[0x10], (unsigned)gx.xfReg[0x0C],
+                 (unsigned)gx.xfReg[0x0A]);
+    }
     sDraws.push_back(d);
 }
 

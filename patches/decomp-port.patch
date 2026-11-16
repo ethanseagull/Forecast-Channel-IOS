@@ -1,8 +1,8 @@
 ﻿diff --git a/include/macros.h b/include/macros.h
-index 23a63c4..d0b8405 100644
+index 23a63c4..cdb8a36 100644
 --- a/include/macros.h
 +++ b/include/macros.h
-@@ -55,6 +55,30 @@
+@@ -55,6 +55,40 @@
  // Distance between pointers
  #define PTR_DISTANCE(start, end) ((u8*)(end) - (u8*)(start))
  
@@ -28,6 +28,16 @@ index 23a63c4..d0b8405 100644
 +#define U32_TO_PTR(T, v) ((T)(v))
 +#define PTR32(T) T*
 +#define PTR32_RAW(field) ((u32)(field))
++#endif
++
++// A GXColor (r, g, b, a bytes) read as one u32 for GXColor1u32, which writes
++// it to the FIFO big-endian. On the Wii that is the original reinterpreting
++// read; on little-endian hosts the bytes are packed explicitly so r stays
++// first.
++#ifdef FORECAST_PORT
++#define GXCOLOR_U32(c) ((u32)(c).r << 24 | (u32)(c).g << 16 | (u32)(c).b << 8 | (u32)(c).a)
++#else
++#define GXCOLOR_U32(c) (*(const u32*)&(c))
 +#endif
 +
  /******************************************************************************
@@ -1247,10 +1257,72 @@ index 8714c93..aaaee72 100644
  
  void TPLBind(TPLPalette* pal);
 diff --git a/src/Connect.cpp b/src/Connect.cpp
-index 8f14596..80fa18e 100644
+index 8f14596..f9da591 100644
 --- a/src/Connect.cpp
 +++ b/src/Connect.cpp
-@@ -430,12 +430,12 @@ void Connect::DrawProgress() {
+@@ -15,6 +15,15 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <wstring.h>
++#ifdef FORECAST_PORT
++#include <port_log.h>
++// WiiLink's short.bin has outgrown the original 0x5000-byte buffer (USA:
++// 21708 bytes decompressed, Nov 2026), so the download fails with
++// "CXGetUncompressedSize() overflow". The port allows 64 KB.
++#define SHORT_BUF_SIZE 0x10000
++#else
++#define SHORT_BUF_SIZE 0x5000
++#endif
+ 
+ static const s32 sProgressIcons[2][6] = {
+     {0, 1, 2, 3, 4, 5},
+@@ -24,7 +33,7 @@ static const s32 sProgressIcons[2][6] = {
+ Connect::Connect(void* arc, ForecastData* data) {
+     mData = data;
+     mForecastBuf = MEM2Alloc(0x32000, 0);
+-    mShortBuf = MEM2Alloc(0x5000, 0);
++    mShortBuf = MEM2Alloc(SHORT_BUF_SIZE, 0);
+     mFade = gFade;
+     mConnectLayout = new ButtonGroup(arc, "error1.brlyt", gButtonColors, false);
+     mErrorLayout = new ButtonGroup(arc, "error0.brlyt", gButtonColors, false);
+@@ -103,7 +112,7 @@ void Connect::Calc() {
+             mState = 1;
+         } else {
+             mTask = CWiiConnect24::getWeather(mForecastBuf, &mForecastTime, &mForecastSize, mShortBuf, &mShortTime,
+-                                              &mShortSize, mForecastUrl, mShortUrl, 0x32000, 0x32000, 0x5000);
++                                              &mShortSize, mForecastUrl, mShortUrl, 0x32000, 0x32000, SHORT_BUF_SIZE);
+             if (mTask < 0) {
+                 OSPanic("Connect.cpp", 163, "CWiiConnect24::getWeather() failed.\n");
+             }
+@@ -154,7 +163,7 @@ void Connect::Calc() {
+             mTaskResult = task->mResult;
+             switch (mTaskResult) {
+             case 0:
+-                    mTask = CWiiConnect24::downloadWeatherShort(mShortBuf, &mShortTime, &mShortSize, 0x5000);
++                    mTask = CWiiConnect24::downloadWeatherShort(mShortBuf, &mShortTime, &mShortSize, SHORT_BUF_SIZE);
+                     if (mTask < 0) {
+                         OSPanic("Connect.cpp", 237, "CWiiConnect24::downloadWeatherShort");
+                     }
+@@ -210,7 +219,18 @@ void Connect::Calc() {
+         break;
+     }
+     case 6:
++        break;
+     case 7:
++#ifdef FORECAST_PORT
++        {
++            static bool sLogged;
++            if (!sLogged) {
++                sLogged = true;
++                port_log("connect: failed: task result %d, forecast check %d, short check %d\n", (int)mTaskResult,
++                         (int)mForecastCheck, (int)mShortCheck);
++            }
++        }
++#endif
+         break;
+     }
+ 
+@@ -430,12 +450,12 @@ void Connect::DrawProgress() {
          SetProgressColor(alpha);
  
          u32 icon = sProgressIcons[gRegion != 0][i];
@@ -1265,6 +1337,28 @@ index 8f14596..80fa18e 100644
 +        DrawTextureAt(U32_TO_PTR(TPLPalette*, gUnk80330B74), icon, 0.6f, 0.6f, &pos);
          x += 40.0f;
      }
+ }
+diff --git a/src/DrawUtil.cpp b/src/DrawUtil.cpp
+index e9c4213..dd9f109 100644
+--- a/src/DrawUtil.cpp
++++ b/src/DrawUtil.cpp
+@@ -72,7 +72,7 @@ void DrawQuad(const Vec* verts, const GXColor* color) {
+     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+     for (int i = 0; i < 4; i++) {
+         GXPosition3f32(verts[i].x, verts[i].y, verts[i].z);
+-        GXColor1u32(*(const u32*)color);
++        GXColor1u32(GXCOLOR_U32(*color));
+     }
+     GXEnd();
+ }
+@@ -108,7 +108,7 @@ void DrawGradientQuad(const Vec* verts, const GXColor* colors) {
+     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+     for (int i = 0; i < 4; i++) {
+         GXPosition3f32(verts[i].x, verts[i].y, verts[i].z);
+-        GXColor1u32(*(const u32*)&colors[i]);
++        GXColor1u32(GXCOLOR_U32(colors[i]));
+     }
+     GXEnd();
  }
 diff --git a/src/ForecastCheck.cpp b/src/ForecastCheck.cpp
 index c1b8c71..5846eee 100644
@@ -1532,6 +1626,104 @@ index c8a3452..8161592 100644
      case -1:
          break;
      default:
+diff --git a/src/SimpleGlobe.cpp b/src/SimpleGlobe.cpp
+index 269849e..f5f1132 100644
+--- a/src/SimpleGlobe.cpp
++++ b/src/SimpleGlobe.cpp
+@@ -18,6 +18,14 @@
+ #include "nw4r/g3d/res/g3d_resmdl.h"
+ #include "nw4r/g3d/res/g3d_resmat.h"
+ 
++// The port cannot read earth.brres yet (milestone 4): SimpleModel then has no
++// scene model, and the globe is skipped (see SimpleModel.cpp).
++#ifdef FORECAST_PORT
++#define PORT_HAS_EARTH_MDL && gEarthModel->mScnMdl != NULL
++#else
++#define PORT_HAS_EARTH_MDL
++#endif
++
+ // Camera distance from the globe per zoom level
+ const f32 sZoomDistances[10] = {
+     1.0f, 2.0f, 5.0f, 8.0f, 12.0f,
+@@ -111,7 +119,7 @@ void SimpleGlobe::SetRotation(const Vec* rotation, s32 frames) {
+         }
+     }
+ 
+-    if (gEarthModel != 0) {
++    if (gEarthModel != 0 PORT_HAS_EARTH_MDL) {
+         gEarthModel->Calc();
+         this->mScnRoot->Insert(this->mScnRoot->Size(), (nw4r::g3d::ScnObj *)gEarthModel->mScnMdl);
+     }
+@@ -219,7 +227,7 @@ void SimpleGlobe::ClearInput() {
+         }
+     }
+ 
+-    if (gEarthModel != NULL) {
++    if (gEarthModel != NULL PORT_HAS_EARTH_MDL) {
+         gEarthModel->Calc();
+         mScnRoot->Insert(mScnRoot->Size(), (nw4r::g3d::ScnObj*)gEarthModel->mScnMdl);
+     }
+@@ -770,7 +778,7 @@ void SimpleGlobe::UpdateWater() {
+     posture.cameraTarget.z = target.z;
+     camera.SetPosture(posture);
+ 
+-    if (gEarthModel != NULL) {
++    if (gEarthModel != NULL PORT_HAS_EARTH_MDL) {
+         nw4r::g3d::ResMdl mdl = gEarthModel->mResMdl;
+         u32 count = mdl.GetResMatNumEntries();
+         u32 luminous = mdl.GetResMat("luminous_mat").GetID();
+diff --git a/src/SimpleModel.cpp b/src/SimpleModel.cpp
+index 4b30a36..2153106 100644
+--- a/src/SimpleModel.cpp
++++ b/src/SimpleModel.cpp
+@@ -6,6 +6,9 @@
+ #include <nw4r/g3d/res/g3d_resfile.h>
+ #include <nw4r/g3d/g3d_scnmdlsmpl.h>
+ #include <nw4r/math.h>
++#ifdef FORECAST_PORT
++#include <port_log.h>
++#endif
+ 
+ // 3.0f, read from other units (SimpleGlobe ctor, fn_8002B9B0) and negated there
+ extern const f32 gModelRange = 3.0f;
+@@ -24,10 +27,25 @@ SimpleModel::SimpleModel(void* resData) : mTrans(0.0f, 0.0f, 0.0f), mRot(0.0f, 0
+     file.Init();
+     file.Bind();
+     mResMdl = file.GetResMdl(0);
++#ifdef FORECAST_PORT
++    // earth.brres is big-endian and the port cannot read it yet (milestone
++    // 4): without a model the globe is simply not drawn, and the 2D screens
++    // work around it.
++    if (!mResMdl.IsValid()) {
++        port_log("globe: earth.brres not readable on the port yet; no globe\n");
++        mScnMdl = NULL;
++        return;
++    }
++#endif
+     mScnMdl = nw4r::g3d::ScnMdlSimple::Construct(&gMEM2Allocator32, &size, mResMdl, 1);
+ }
+ 
+ SimpleModel::~SimpleModel() {
++#ifdef FORECAST_PORT
++    if (mScnMdl == NULL) {
++        return;
++    }
++#endif
+     mScnMdl->Destroy();
+ }
+ 
+@@ -36,6 +54,11 @@ void SimpleModel::Calc() {}
+ 
+ void SimpleModel::UpdateMtx() {
+     mMtx = CalcMtx(mRot);
++#ifdef FORECAST_PORT
++    if (mScnMdl == NULL) {
++        return;
++    }
++#endif
+     mScnMdl->SetMtx(nw4r::g3d::ScnObj::MTX_LOCAL, &mMtx);
+ }
+ 
 diff --git a/src/Sound.cpp b/src/Sound.cpp
 index 2e98f66..d4563c2 100644
 --- a/src/Sound.cpp
@@ -1679,7 +1871,7 @@ index 612909c..4cc4877 100644
  }
  
 diff --git a/src/System.cpp b/src/System.cpp
-index 8a3b2b2..bcce3d0 100644
+index 8a3b2b2..304c60b 100644
 --- a/src/System.cpp
 +++ b/src/System.cpp
 @@ -62,9 +62,9 @@ void SystemInit(void) {
@@ -1725,6 +1917,18 @@ index 8a3b2b2..bcce3d0 100644
  
      gScene = scene;
      gMEM1FreeSize = MEMGetTotalFreeSizeForExpHeap(gMEM1Heap);
+@@ -898,9 +907,9 @@ void DrawLine(const Vec* start, const Vec* end, u8 width, const GXColor& startCo
+ 
+     GXBegin(GX_LINES, GX_VTXFMT0, 2);
+     GXPosition3f32(start->x, start->y, start->z);
+-    GXColor1u32(*(const u32*)&startColor);
++    GXColor1u32(GXCOLOR_U32(startColor));
+     GXPosition3f32(end->x, end->y, end->z);
+-    GXColor1u32(*(const u32*)&endColor);
++    GXColor1u32(GXCOLOR_U32(endColor));
+     GXEnd();
+ }
+ 
 @@ -1242,6 +1251,53 @@ void MEM2Free(void* block) {
      MEMFreeToExpHeap(gMEM2Heap, block);
  }
@@ -1872,6 +2076,59 @@ index 661a8c4..42c94f6 100644
          mIconPos.z = pos.z;
          TPLPalette* tpl = gCommonTpl;
          u32 icon = 3;
+diff --git a/src/WiiConnect24.cpp b/src/WiiConnect24.cpp
+index 37e5133..336a8b3 100644
+--- a/src/WiiConnect24.cpp
++++ b/src/WiiConnect24.cpp
+@@ -38,6 +38,11 @@ extern MEMiHeapHead* gWC24Heap;
+ extern u8 gWC24HeapPadding[4];
+ 
+ void* DownloaderThread(void* unused);
++#ifdef FORECAST_PORT
++#include <port_log.h>
++// port/res/wc24_swap.cpp: forecast.bin / short.bin to native byte order.
++extern "C" BOOL PortSwapWC24File(u16 taskId, void* data, u32 size);
++#endif
+ 
+ void InitDownloader(void) {
+     void* block = MEM2Alloc(0x10000, 0x20);
+@@ -264,6 +269,9 @@ static inline void SetTaskMessage(WC24Task* task, const char* msg, s32 code, s32
+     task->mErrorCode = code;
+     task->mNwc24Result = result;
+     sprintf(task->mMessage, "%s %d %d", msg, code, result);
++#ifdef FORECAST_PORT
++    port_log("wc24: %s\n", task->mMessage);
++#endif
+ }
+ 
+ // A macro, not an inline: the message literal must reach SetTaskMessage directly.
+@@ -586,10 +594,18 @@ NWC24Err DownloadFiles(WC24Task* task, u32 doForecast, u32 doShort) {
+         if (result != NWC24_OK)
+             return result;
+ 
++#ifdef FORECAST_PORT
++        // The files are big-endian; the channel reads them in place.
++        PortSwapWC24File(ids[i], buffers[i], outSize);
++#endif
++
+         *sizes[i] = outSize;
+ 
+         // Pads the size to a multiple of 4, but writes into the task itself
+         // rather than into the downloaded buffer.
++#ifndef FORECAST_PORT
++        // (outSize bytes past the task: up to 3 stray bytes anywhere in
++        // memory. The port skips it.)
+         char* p;
+         u32 size = outSize;
+         p = (char*)&task->mBuffers + size;
+@@ -597,6 +613,7 @@ NWC24Err DownloadFiles(WC24Task* task, u32 doForecast, u32 doShort) {
+             *p++ = 0;
+             size++;
+         }
++#endif
+ 
+         vfError = VFCloseFile(file);
+         if (vfError != 0) {
 diff --git a/src/main.cpp b/src/main.cpp
 index e297592..0386252 100644
 --- a/src/main.cpp

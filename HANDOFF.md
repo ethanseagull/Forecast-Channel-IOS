@@ -30,14 +30,17 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main**: milestones 1 and 2; `git log` for the tip. No remote, nothing
-  pushed.
-- **Milestone 2 renderer done** (`PLAN.md` "Milestone 2"). `build\windows\forecast.exe`
-  draws on SDL3 GPU (D3D12) and takes touch (left mouse) as the Wii pointer. It
-  stops on the channel's "Unable to download the latest information"
-  (FORE000005) screen, because NWC24 is a stub: the weather scenes need
-  milestone 3. Automated runs: `FORECAST_HIDDEN=1`, `FORECAST_DUMP_FRAME=n`
-  (writes `efb_<n>.bmp`), `FORECAST_TOUCH=frame:x:y:frames`. Shaders:
+- **main**: milestones 1-3; `git log` for the tip. No remote, nothing pushed.
+- **Milestones 2 and 3 done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
+  downloads the forecast from WiiLink, runs the first-run setup (date check,
+  region, city) and shows real weather on the 2D screens, drawn on SDL3 GPU
+  (D3D12), with touch (left mouse) as the Wii pointer. The globe is not drawn:
+  `earth.brres` is big-endian and nothing converts it yet (milestone 4); the
+  scene runs without it. Setup choices persist in the data directory, so later
+  runs start in the weather scene. Automated runs: `FORECAST_HIDDEN=1`,
+  `FORECAST_DUMP_FRAME=n[,m]` (writes `efb_<n>.bmp`),
+  `FORECAST_TOUCH=frame:x:y:frames[;...]`, `FORECAST_LOG_DRAWS=n` (TEV and
+  blend state of every draw in frame n). Shaders:
   `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound is off until its archive is converted
   (`Sound.cpp`, `SoundManager.cpp`, `WeatherScene.cpp`). The cursor effect is
   dropped for good (`Scene.cpp`): the targets are touchscreens, so no cursor
@@ -97,13 +100,13 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 1. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
-2. **Milestone 3: forecast data.** NWC24/VF are stubs; fetch `forecast.bin` /
-   `short.bin` from `http://fore.wiilink24.com/...` and feed them where the
-   channel's VF/NWC24 reads expect them. `forecast.bin` parsing is 64-bit safe
-   (offsets only, per the audit). The weather scenes are also the renderer's
-   first real test beyond the error screens: dump frames
-   (`FORECAST_DUMP_FRAME`) and compare with Dolphin.
-   Renderer gaps that may show up there or with the globe: indirect texturing
+2. **Milestone 4: the globe.** Convert `earth.brres` (MDL0, TEX0, PLT0 and the
+   animations) to native byte order at load, like `port/res/lyt_swap.cpp`;
+   then remove the "no globe" guards (`SimpleModel.cpp`, `PORT_HAS_EARTH_MDL`
+   in `SimpleGlobe.cpp`). Includes the audit's g3d items (item 3).
+   The texture packs come with it. Compare frames with Dolphin, which has the
+   same WiiLink-patched channel.
+   Renderer gaps that may show up there: indirect texturing
    (emboss), fog, z textures, EFB-copy format conversion, logic ops. Each logs
    once. Every image in use is also re-hashed each frame, because the channel
    calls GXInvalidateTexAll every frame (about 80 KB a frame now); profile

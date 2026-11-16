@@ -72,7 +72,7 @@ uint32_t port_platform_frame(void) {
         }
     }
 
-    // Debugging: FORECAST_TOUCH=frame:x:y:frames touches the window at (x, y)
+    // Debugging: FORECAST_TOUCH=frame:x:y:frames[;...] touches the window at (x, y)
     // (0-1 of the window size) for that many frames.
     static const char* sTouch;
     static bool sTouchRead;
@@ -80,10 +80,11 @@ uint32_t port_platform_frame(void) {
         sTouch = SDL_getenv("FORECAST_TOUCH");
         sTouchRead = true;
     }
-    if (sTouch != NULL) {
+    // Several touches: separated by ';'.
+    for (const char* t = sTouch; t != NULL && *t != '\0';) {
         unsigned start = 0, len = 0;
         float tx = 0, ty = 0;
-        if (SDL_sscanf(sTouch, "%u:%f:%f:%u", &start, &tx, &ty, &len) == 4 && sFrame + 1 >= start &&
+        if (SDL_sscanf(t, "%u:%f:%f:%u", &start, &tx, &ty, &len) == 4 && sFrame + 1 >= start &&
             sFrame + 1 <= start + len) {
             int w = 0, h = 0;
             SDL_GetWindowSize(sWindow, &w, &h);
@@ -91,6 +92,10 @@ uint32_t port_platform_frame(void) {
             sPointerY = ty * (float)h;
             sPointerInside = true;
             sPointerDown = sFrame + 1 < start + len;
+        }
+        t = SDL_strchr(t, ';');
+        if (t != NULL) {
+            t++;
         }
     }
 
