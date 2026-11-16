@@ -67,8 +67,13 @@ iOS (Metal) unchanged. iOS then only adds packaging, touch, file import and netw
    indirect/bump texturing for the globe's emboss, EFB copies -> render-to-texture.
 3. **Texture replacement.** Hash each texture the way Dolphin does (XXH64 of the texel data, plus
    the palette for paletted formats) and load the matching PNG from the WiiPC packs.
-4. **Input.** Touch -> the Wii pointer (KPAD DPD position in layout space), tap = A.
-   Mouse on Windows.
+4. **Input: touch, no cursor.** The channel's UI is built on the Wii pointer (hit tests,
+   hover, globe drag, city labels in ~12 files), so a touch drives the pointer underneath:
+   finger down = pointer at that spot (KPAD DPD position in layout space) with A held,
+   lift = A released, no finger = pointer off screen. Nothing is drawn for it: the cursor
+   and its sparkle effect (the only user of `nw4r::ef`) are dropped, not ported.
+   Mouse on Windows behaves the same (button down = touch). What touch lacks is designed
+   in milestone 7: hover feedback, B (back), +/- (globe zoom), 1/2.
 5. **Forecast data.** NWC24 -> HTTP fetch of `forecast.bin` / `short.bin` from WiiLink
    (`http://fore.wiilink24.com/...`). iOS needs an App Transport Security exception for
    plain HTTP. Written where the channel expects its downloaded files.
@@ -95,14 +100,15 @@ as an artifact, and the user's sideloading tool signs and installs it from Windo
 2. **2D layouts draw.** GX interpreter -> SDL3 GPU; the main menu renders and responds to the mouse.
 3. **Forecast data** from WiiLink, real weather on screen.
 4. **Globe** (g3d brres byte-swap, CMPR, emboss) and the texture packs.
-5. **Audio, cursor effect, polish.**
+5. **Audio, polish.**
 6. **iOS target.** Touch, file import, packaging, sideload.
 7. **iPhone layout.** Make it feel native rather than a pillarboxed TV screen:
    - Landscape first: the channel already has a 16:9 mode; extend the layouts' edge-anchored panes
      to ~19.5:9 instead of letterboxing, and keep content out of the notch / Dynamic Island and
      home-indicator safe areas.
    - Touch: Wii buttons were sized for a pointer; enlarge hit areas (and maybe art) for fingers.
-     Scroll/drag gestures for the globe and lists where the Wii used button holds.
+     Drag to spin the globe and scroll lists, pinch to zoom (Wii: +/-), a back gesture or
+     button (Wii: B), and a pressed state where the Wii relied on hover highlights.
    - Text legibility at phone size (font scale per layout).
    - Portrait mode would need new or rearranged layouts (BRLYT edits or code-side placement);
      decide after landscape works.
@@ -132,9 +138,10 @@ How the 64-bit problems are handled (details in `patches/decomp-port.patch`, all
   emulated with arm64's result (`port/sdk/crash_win.c`).
 - 157 unported SDK functions are generated stubs (`port/sdk/autostubs.c`), logged on first use.
 
-Temporarily off on the port (each marked in the source):
-- Cursor sparkle effect (breff/breft not converted; `Scene.cpp`).
-- Sound (brsar not converted, AX not ported; `Sound.cpp`, `SoundManager.cpp` guards).
+Off on the port (each marked in the source):
+- Cursor sparkle effect: dropped for good (touch devices draw no cursor; `Scene.cpp`
+  never loads breff/breft). The cursor sprite drawing goes the same way in milestone 2.
+- Sound, temporarily (brsar not converted, AX not ported; `Sound.cpp`, `SoundManager.cpp`).
 
 ### Next (from `notes/64bit-audit.md`, before or during milestone 2)
 - **Channel code reaches into `lyt::Pane` / `TextBox` by hard-coded Wii offsets**
@@ -143,7 +150,7 @@ Temporarily off on the port (each marked in the source):
   corrupts pane flags as soon as layouts animate.
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
 - snd TaskManager 0x40-byte units vs larger 64-bit tasks (when sound comes back).
-- ef relocation (texture header, emitter name, particle texture pointers) for the cursor effect.
+- (ef relocation items: moot, the cursor effect is dropped.)
 - `port_gx_addr` should assert in debug builds when given a stack / C-heap pointer.
 
 ## Repo rules

@@ -19,7 +19,9 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 **User's policy.**
 - Make the technical calls and explain them briefly; the user says "you tell
   me" to option lists. Do installs and downloads for them when the tools allow.
-- The user decides commits and pushes. Commits use the repo-local identity
+- Commit finished work without asking (user's standing go-ahead, 2026-11-16);
+  ask before pushing, adding a remote or creating a GitHub repo. Commits use
+  the repo-local identity
   `ForecastOS <244728604+ethanseagull@users.noreply.github.com>` and carry no
   AI co-author / attribution lines (same rule as forecast-3ds).
 - No Mac: iOS builds will run on a GitHub Actions macOS runner and be
@@ -28,14 +30,15 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main = `33cf20c`** (first commit), working tree clean apart from this file.
+- **main**: milestone 1 (`33cf20c`) plus docs commits; `git log` for the tip.
   No remote, nothing pushed.
 - **Milestone 1 done.** `build\windows\forecast.exe` boots: SystemInit, weather
   scene, 5 layouts + 4 fonts, 60 fps, no crash; waits on the "connecting"
   screen (NWC24 is a stub). Draws are counted, not rendered
-  (`port/gx/gx_null.cpp`). Sound and the cursor effect are off on purpose
-  (files not converted yet; marked `FORECAST_PORT` in `Sound.cpp`,
-  `SoundManager.cpp`, `Scene.cpp`, `WeatherScene.cpp`).
+  (`port/gx/gx_null.cpp`). Sound is off until its archive is converted
+  (`Sound.cpp`, `SoundManager.cpp`, `WeatherScene.cpp`). The cursor effect is
+  dropped for good (`Scene.cpp`): the targets are touchscreens, so no cursor
+  is drawn; touch drives the Wii pointer underneath (`PLAN.md` item 4).
 - **Wii match:** with `patches/decomp-port.patch` applied the decomp's DOL
   still matches (`build\tools\dtk.exe shasum -c config\HAFE\build.sha1`: OK).
 - **Local-only, not in git** (rebuild with the commands below):
@@ -98,8 +101,10 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    backend: vertex transform from XF state, TEV stages -> generated shaders,
    texture decode (forecast-3ds `port/gx/gx_tex.cpp` has decoders for RGB5A3,
    I4/I8/IA4/IA8, CMPR; its citro3d upload is not reusable), EFB copies.
-   Present on GXCopyDisp (`gx_efb_copy`). Mouse as the Wii pointer through
-   KPADRead (currently a stub; `port_pointer()` in `platform.c` is ready).
+   Present on GXCopyDisp (`gx_efb_copy`). Input: implement KPADRead so a
+   touch (mouse button on Windows) is the Wii pointer with A held; no touch =
+   pointer off screen (`port_pointer()` in `platform.c` is ready). Stop the
+   cursor sprite from being drawn (`Cursor` in `Scene.cpp`).
 3. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
@@ -108,12 +113,15 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    channel's VF/NWC24 reads expect them. `forecast.bin` parsing is 64-bit safe
    (offsets only, per the audit).
 5. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
-   arrays (globe, milestone 4); snd TaskManager unit size (with sound); ef
-   relocation (cursor effect); make `port_gx_addr` assert on stack / C-heap
-   pointers in debug builds.
-6. **Sound and cursor effect** (milestone 5): convert brsar / breff / breft at
-   load, port AX to SDL3 audio, then remove the port skips.
+   arrays (globe, milestone 4); snd TaskManager unit size (with sound); make
+   `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
+   items are moot (cursor effect dropped).
+6. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
+   remove the port skips.
 7. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
-   runner, unsigned .ipa artifact, touch -> pointer, Files-app import of the
-   channel contents, ATS exception for WiiLink's plain HTTP. Watch for `long`
-   (64-bit on iOS, 32 on Windows) in anything the audit missed.
+   runner, unsigned .ipa artifact, SDL touch events into the same pointer path
+   as the mouse, Files-app import of the channel contents, ATS exception for
+   WiiLink's plain HTTP. Watch for `long` (64-bit on iOS, 32 on Windows) in
+   anything the audit missed.
+8. **Touch design** (milestone 7, with the iPhone layout): replacements for
+   hover highlights, B (back), +/- (globe zoom: pinch), 1/2; bigger hit areas.
