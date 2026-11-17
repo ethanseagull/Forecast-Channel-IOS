@@ -166,5 +166,9 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 4. **Texture compression: check ASTC on an iPhone** (milestone 6). The GPU-side
    ASTC path cannot run on this PC (no ASTC on desktop GPUs); its blocks were
    verified against an independent decoder (`tools/texcodec_test`). BC1 runs here.
-5. **Touch design, rest** (milestone 7): B (back) and 1/2 have no gesture yet; bigger hit
+5. **Screen fill, 2D pages (later, the user's call):** stretching the frame's edge columns
+   widens the outer buttons, so their labels look off centre. Tried and reverted (user didn't
+   like it): gradient continuation + a divider at the frame's edge (commit 03c46e4). Options
+   offered: leave it, dim the strips, blurred strips, black strips on 2D pages only.
+6. **Touch design, rest** (milestone 7): B (back) and 1/2 have no gesture yet; bigger hit
    areas; a pressed state where the Wii relied on hover highlights; text size at phone scale.
