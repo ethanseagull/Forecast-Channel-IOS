@@ -623,10 +623,23 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
 static void ensure_efb(void) {
     u32 w, h;
     gx_efb_size(&w, &h);
-    // Render at a whole multiple of the Wii's EFB that covers the window.
+    // iOS: render at the largest whole multiple of the Wii's EFB that fits the
+    // window's height (the frame is then scaled up a little). Covering the
+    // window instead rendered far more pixels than are shown: 3x on an
+    // iPhone 15 Pro (1920x1368 for a 1179-pixel-high screen) left it GPU-bound
+    // at ~30 fps. FORECAST_EFB_SCALE=n overrides it.
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(port_window(), &pw, &ph);
+#ifdef SDL_PLATFORM_IOS
+    u32 scale = ph > 0 ? (u32)ph / h : 2;
+#else
+    // Desktop GPUs have room to spare: cover the window.
     u32 scale = ph > 0 ? (u32)((ph + h - 1) / h) : 2;
+#endif
+    const char* forced = SDL_getenv("FORECAST_EFB_SCALE");
+    if (forced != NULL && SDL_atoi(forced) > 0) {
+        scale = (u32)SDL_atoi(forced);
+    }
     if (scale < 1) {
         scale = 1;
     }
