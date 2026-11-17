@@ -64,7 +64,8 @@ iOS (Metal) unchanged. iOS then only adds packaging, touch, file import and netw
    GX addresses are offsets into it, with a small table for static data. Audit structs that
    overlay file data for pointer members.
 2. **Renderer.** One precompiled TEV ubershader that decodes the raw BP registers at run time
-   (all 16 stages; no shader compiler on the device), vertices transformed on the CPU,
+   (all 16 stages), plus a shader per TEV configuration generated and compiled at run time
+   (Metal compiles MSL source; "Specialized TEV shaders" below), vertices transformed on the CPU,
    EFB copies -> GPU textures. Still to do: indirect/bump texturing for the globe's emboss,
    fog, z textures.
 3. **Texture replacement.** Hash each texture the way Dolphin does (XXH64 of the texel data, plus
@@ -271,6 +272,57 @@ GPU texture memory on the globe: 123 MB -> 22 MB (BC1), 497 MB -> 98 MB with the
 - iOS target: CMake app bundle (`port/ios/Info.plist.in`), SDL3 built from source, Metal
   shaders generated from the HLSL by `tools/build_shaders_msl.sh` (glslang + SPIRV-Cross),
   GitHub Actions workflow `.github/workflows/ios.yml` -> unsigned `ForecastOS.ipa`.
+
+### Specialized TEV shaders (2026-11-16)
+The iPhone was GPU-bound on the ubershader, so each TEV configuration a draw uses now gets its
+own pixel shader, as in Dolphin; the ubershader draws until it is ready.
+- `port/gx/gx_tevgen.cpp`: key and source generator, HLSL or MSL from one generator. Key: the
+  number of TEV / indirect stages, per stage the colour and alpha combiners (all fields), tev
+  order, konst selects and indirect command, the swap tables, the alpha test functions and
+  logic, the indirect stages' map / coord, which sampled maps are bound; fields nothing reads
+  are zeroed. Uniforms: the same `GXTevUniforms` block as the ubershader (TEV registers, konst
+  colours, alpha refs, indirect matrices and scales, texcoord / texture sizes). The code is
+  the ubershader's math with the fields as constants.
+- `port/gx/gx_spec.cpp`: cache (by key), one worker thread (generate; Windows: compile to DXIL
+  with the SDK's `dxcompiler.dll`, `gx_dxc.cpp`), SDL objects within 3 ms a frame on the main
+  thread (Apple: `SDL_CreateGPUShader`, which compiles the MSL, on the worker), pipelines keyed
+  by shader + blend/depth/cull state. Keys and pipelines seen go to `<data>/tev_shaders.bin` and
+  are built at the next start. Logs each new shader and every 600 frames the share of draws
+  specialized.
+- Exactness: `FixedCoord` / `FixedToUv` (texel coordinates for indirect texturing) are now
+  `precise` in the ubershader too; without it, ~0.5% of random indirect configurations differed
+  by a texel at a pixel or two. `tools\tevgen\build.bat`: all 1011 sample sources (11 real keys
+  + random) compile with dxc -WX, and 12,000 draws of real and random register states with
+  random inputs are byte-identical between the two shaders on the RTX 5070. Frame dumps of every
+  scene (start-up fade, error 107000, date check, region list, forecast pages, globe zoomed in and
+  out) are identical with `FORECAST_SPECIALIZED=0` and `=sync`, and the new ubershader matches
+  the old one.
+- Shaders per scene: start-up 4-5, error screen 4, date / region 5-6, forecast pages 11, globe
+  10; 11 in all.
+- Windows Release, RTX 5070, GPU time a frame (`FORECAST_GPU_TIME`, submit to completion):
+  EFB 2x 0.54 ms ubershader, 0.30-0.44 specialized; EFB 4x 0.85 ms and 0.36-0.46. DXC takes
+  5-19 ms a shader on the worker; with the remembered keys every draw is specialized from the
+  first frames.
+- Metal: compiled and linked only on the CI (`.github/workflows/ios.yml` step "Specialized
+  shaders"); not yet run on an iPhone. The ubershader's MSL comes from SPIRV-Cross, and Metal
+  compiles both with fast math, so identical pixels there are likely but not proven.
+
+### CPU vertex transform (2026-11-16)
+`port/gx/gx_xform.cpp` rewritten for speed with bit-identical output:
+- Per-draw setup (channel controls, colours, lights, texgens, post matrices, viewport decoded to
+  plain floats) is cached and reused while XF registers 0x09-0x57, BP 0x4A and the XF-memory
+  words it read are unchanged. **If the setup ever reads another XF register or XF-memory word,
+  widen `XF_REG_FIRST`/`XF_REG_END` or call `note_xf_mem()`**, or stale state is reused.
+- Vertices go through in chunks of 48, one stage at a time (clang auto-vectorizes the sqrt /
+  divide stages; no intrinsics); each chunk's triangles are emitted at once (no whole-primitive
+  staging, no zero-filling resize). Light terms shared between channels; q8 by table.
+- Checked out of tree against the old file: 26.9M vertices memcmp-identical (-O2, -mfma like
+  arm64's default contraction, AVX2, -O0); only NaN sign/payload differs on nonsense inputs.
+  **Never build with `-ffast-math` / `-ffp-contract=fast`** (it breaks the identity).
+- x64 Release: a globe frame's transform 1.52 -> 0.82 ms, the Earth draw 2.3x faster.
+- Assumes one GX thread (as before) and a 144-byte `GXVtxOut` (static_assert).
+- Next floor is memory traffic (144 bytes written a vertex): a smaller `GXVtxOut` or indexed
+  output would be the next step.
 
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the

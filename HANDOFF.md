@@ -47,8 +47,20 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
   `efb_<n>.bmp`), `FORECAST_TOUCH=frame:x:y:frames[;...]` (the Globe button is
   at 0.85:0.9 on the weather pages), `FORECAST_BUTTON=frame:minus|plus|b|home|1|2:frames[;...]`,
   `FORECAST_LOG_DRAWS=n` (TEV, indirect and blend state of every draw in frame
-  n); the log prints fps and busy % every 600 frames. Shaders:
-  `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound plays: `rev_wtr.brsar` is converted at load
+  n), `FORECAST_QUIT_FRAME=n` (quit after frame n), `FORECAST_GPU_TIME=1`
+  (wait for each frame's GPU work and log its time every 120 frames); the log
+  prints fps and busy % every 600 frames. Shaders:
+  `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`.
+  Specialized TEV shaders (`PLAN.md` "Status"): a pixel shader per TEV
+  configuration, generated (`port/gx/gx_tevgen.cpp`) and compiled at run time
+  (Windows: the SDK's `dxcompiler.dll`; Apple: MSL through SDL), the
+  ubershader until it is ready. `FORECAST_SPECIALIZED=0` turns them off,
+  `=sync` compiles on first use (every draw specialized; for comparing dumps),
+  `FORECAST_SPECIALIZED_DUMP=dir` writes the sources and keys. Keys and
+  pipelines seen are kept in `<data>/tev_shaders.bin` and built at start-up.
+  `tools\tevgen\build.bat <dir>` compiles samples and checks on the GPU that
+  they draw exactly what the ubershader draws; change `gx_ps.hlsl` and the
+  generator together. Sound plays: `rev_wtr.brsar` is converted at load
   (`port/res/brsar_swap.cpp`) and AX/AI are emulated (`port/sdk/ax.c`, `ai.c`)
   onto an SDL3 audio stream; `FORECAST_MUTE=1` silences it (frames still run),
   `FORECAST_AUDIO_RAW=file` captures the mix (s16 stereo 32 kHz). The cursor effect is
@@ -110,6 +122,15 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    - A bit laggy. Get `boot.log` from the app's Files folder: it prints fps and busy % every
      600 frames. Suspects: the 3x EFB (1920x1368), the TEV ubershader's per-pixel loops on a
      tile GPU, CPU vertex transform, the per-frame texture re-hash.
+     Specialized TEV shaders now replace the ubershader (not yet run on the phone: check
+     `boot.log` for "tev shader N" lines, "failed" and the "draws specialized" summary). A
+     shader that fails to compile falls back to the ubershader by itself. If the Metal path
+     misbehaves otherwise: `gx_spec_init` picks the defaults (`FORECAST_SPECIALIZED=main`
+     creates the SDL shaders on the main thread, `=0` turns specialization off; a sideloaded
+     app has no environment to set, so change the default and rebuild). The CPU vertex
+     transform is also ~2x faster (PLAN.md "CPU vertex transform"), and the EFB is 2x on the
+     phone. Their last log of the 3x / ubershader build: 43-48 fps for the first ~15 s on the
+     globe, then a steady 60 (GPU ~11 ms of wait a frame).
    - Does not fill the screen: the 16:9 frame is letterboxed on the 19.5:9 display (milestone 7).
    - No pinch to zoom the globe (milestone 7; the Remote's -/+ have no touch equivalent yet).
    - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from

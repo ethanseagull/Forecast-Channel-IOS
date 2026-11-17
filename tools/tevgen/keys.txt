@@ -1,0 +1,16 @@
+# TEV configurations the channel uses (gx_tevgen key text form, written by
+# FORECAST_SPECIALIZED_DUMP; see tools/tevgen/samples.cpp). Words: stages,
+# indirect stages, alpha test, maps, indirect refs, swap tables, then per
+# stage colour, alpha, order | ksel, indirect command.
+# Start-up, forecast pages, globe (zoomed in and out):
+1 0 3c 0 0 e4 8fffa 8ffd0 0 0
+1 0 3c 1 0 e4 8f824 8f0a0 40 0
+2 0 3f 1 0 e4 8248f 82a70 40 0 8f0af 8e2f0 0 0
+1 0 3f 1 0 e4 8248f 82a70 40 0
+1 0 3f 1 0 e4 8fffa 8f2f0 40 0
+1 0 3c 1 0 e4 8ac8f 8f0f0 40 0
+1 0 3c 1 0 e4 8fffa 8f2f0 40 0
+1 0 3c 1 0 e4 84824 8f0a0 40 0
+6 1 3f f 12 24e4 8fff8 8ffc0 5b 0 8fff8 48fa70 380049 0 8801f 8fff0 49 270 8f08f 28ffc4 40 0 8fe0f 28dc70 c000 0 8f130 8ffe0 0 0
+1 0 3f 1 0 e4 8fc8f 8f2f0 40 0
+1 0 3c 1 0 e4 8f8af 8f2f0 40 0

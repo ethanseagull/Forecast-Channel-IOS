@@ -1,7 +1,8 @@
 #!/bin/sh
 # Generates the Metal shaders (MSL) from the HLSL in port/gx/shaders, for the
 # Apple builds: HLSL -> SPIR-V (glslang's HLSL front end) -> MSL (SPIRV-Cross).
-# Output: <outdir>/gx_shaders_msl.h with gx_vs_msl[] and gx_ps_msl[] as text.
+# Output: <outdir>/gx_shaders_msl.h with gx_vs_msl[] and gx_ps_msl[] as text,
+# and the same as gx_vs.metal / gx_ps.metal (for the CI's shader checks).
 #
 #   tools/build_shaders_msl.sh <outdir> [ios|macos]
 #
@@ -49,5 +50,6 @@ with open(out, 'w') as f:
     f.write(arr('gx_ps_msl', tmp + '/gx_ps.metal'))
     f.write('#endif\n')
 EOF
+cp "$tmp/gx_vs.metal" "$tmp/gx_ps.metal" "$out/"
 echo "MSL shaders -> $out/gx_shaders_msl.h"
 rm -rf "$tmp"

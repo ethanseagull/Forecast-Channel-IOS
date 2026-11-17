@@ -6,6 +6,11 @@
 // hardware's integer precision: 8-bit inputs, signed 11-bit registers, the
 // 0..255 -> 0..256 lerp factor and the rounding of the lerp.
 //
+// The port also generates a shader per TEV configuration at run time
+// (port/gx/gx_tevgen.cpp, the same math with the configuration baked in) and
+// uses this one until that is compiled. The two must give identical pixels
+// (tools/tevgen checks it): change both together.
+//
 // Implemented: 1-16 stages (genMode), tev orders (texmap, texcoord, enable,
 // ras channel), colour and alpha combiners (all inputs, bias, add/sub, scale,
 // clamp, dest register, compare modes), konstant selects, the 4 swap tables
@@ -139,11 +144,15 @@ float3 TexCoord(GXVaryings i, uint n) {
 // Texture coordinate n in texels, S17.7 fixed point: the normalized
 // coordinate times the texcoord's SU scale, as the hardware's setup unit
 // hands it to the TEV. Truncated like Dolphin's int2() conversion.
+// precise: the truncation must not depend on how the compiler orders or fuses
+// the arithmetic, or the specialized shaders (gx_tevgen.cpp), which compute
+// the same, could land a coordinate on the other side of an integer.
 int2 FixedCoord(float3 stq, uint n) {
     uint r = TcScaleReg(n);
-    float2 scale = float2((float)((r & 0xFFFFu) + 1u), (float)((r >> 16) + 1u));
-    float q = stq.z != 0.0 ? stq.z : 1.0;
-    return int2(stq.xy / q * scale * 128.0);
+    precise float2 scale = float2((float)((r & 0xFFFFu) + 1u), (float)((r >> 16) + 1u));
+    precise float q = stq.z != 0.0 ? stq.z : 1.0;
+    precise float2 v = stq.xy / q * scale * 128.0;
+    return int2(v);
 }
 
 // An S17.7 texel coordinate of texture map 0-7 as a normalized one: divided
@@ -151,8 +160,9 @@ int2 FixedCoord(float3 stq, uint n) {
 // copies are larger on the GPU, normalized coordinates don't care).
 float2 FixedToUv(uint map, int2 c) {
     uint r = TexImage0Reg(map);
-    float2 size = float2((float)((r & 0x3FFu) + 1u), (float)(((r >> 10) & 0x3FFu) + 1u));
-    return float2(c) / (size * 128.0);
+    precise float2 size = float2((float)((r & 0x3FFu) + 1u), (float)(((r >> 10) & 0x3FFu) + 1u));
+    precise float2 uv = float2(c) / (size * 128.0);
+    return uv;
 }
 
 // Indirect stage s (0-3): looks up its texture (texmap / texcoord from BP

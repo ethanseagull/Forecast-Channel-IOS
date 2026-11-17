@@ -31,6 +31,32 @@ jobs:
       - name: Metal shaders
         run: sh tools/build_shaders_msl.sh build-ios/generated ios
 
+      # The app generates specialized TEV pixel shaders as MSL at run time
+      # (port/gx/gx_tevgen.cpp); nothing compiles them at build time. Generate
+      # the ones the channel is known to use (tools/tevgen/keys.txt) plus
+      # random ones, compile each with Apple's compiler, and link them with
+      # the ubershader's vertex shader into pipelines where the runner has a
+      # Metal device.
+      - name: Specialized shaders (compile and link check)
+        run: |
+          t="$RUNNER_TEMP/tevgen"
+          mkdir -p "$t"
+          # The interface the generated shaders must match (in the log).
+          sed -n '/^struct main0_out/,/^};/p' build-ios/generated/gx_vs.metal
+          sed -n '/^struct main0_in/,/^};/p' build-ios/generated/gx_ps.metal
+          clang++ -std=c++14 -O1 -Iport/gx tools/tevgen/samples.cpp port/gx/gx_tevgen.cpp -o "$t/samples"
+          "$t/samples" tools/tevgen/keys.txt "$t" 40
+          if ! xcrun -sdk iphoneos metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain || true
+          fi
+          if xcrun -sdk iphoneos metal --version >/dev/null 2>&1; then
+            ls "$t"/*.metal | xargs -P 4 -I{} sh -c 'xcrun -sdk iphoneos metal -c "{}" -o "{}.air" || { echo "FAILED: {}"; exit 255; }'
+            echo "All $(ls "$t"/*.metal | wc -l) specialized shader samples compile."
+          else
+            echo "::warning::Metal compiler not available: specialized shader samples not compiled"
+          fi
+          xcrun swift tools/tevgen/link_check.swift build-ios/generated/gx_vs.metal build-ios/generated/gx_ps.metal "$t"/*.metal
+
       - name: Configure
         run: >
           cmake -S . -B build-ios -G Xcode

@@ -3,11 +3,13 @@
 // Draws are recorded as the command processor decodes them: gx_xform.cpp
 // transforms each primitive into a frame-wide vertex list, and the draw keeps
 // a copy of the pixel state it needs (pipeline, textures, scissor, the TEV
-// registers for the ubershader). Textures are decoded by gx_tex.cpp and
-// uploaded once per version. The copy to the display (GXCopyDisp) ends the
-// frame: one copy pass uploads the vertices and new textures, one render pass
-// replays the draws into the EFB (a render target at a multiple of the Wii's
-// resolution), and the EFB is scaled onto the window.
+// registers). The pixel shader is the TEV ubershader, or once it is compiled
+// a shader specialized for the draw's TEV configuration (gx_spec.cpp).
+// Textures are decoded by gx_tex.cpp and uploaded once per version. The copy
+// to the display (GXCopyDisp) ends the frame: one copy pass uploads the
+// vertices and new textures, one render pass replays the draws into the EFB
+// (a render target at a multiple of the Wii's resolution), and the EFB is
+// scaled onto the window.
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +19,7 @@
 #include <SDL3/SDL.h>
 
 #include "gx_internal.h"
+#include "gx_spec.h"
 #include "gx_tex_decode.h"
 #include "gx_texcodec.h"
 // Shaders: DXIL (D3D12) on Windows, committed; MSL (Metal) on Apple,
@@ -106,7 +109,9 @@ union PipeKey {
     };
 };
 
-static std::unordered_map<u32, SDL_GPUGraphicsPipeline*> sPipelines;
+// By shader (0 the ubershader, else a specialized shader's id, gx_spec.h) and
+// PipeKey bits.
+static std::unordered_map<u64, SDL_GPUGraphicsPipeline*> sPipelines;
 
 static SDL_GPUBlendFactor blend_factor(u32 f, bool dst, bool efbAlpha) {
     switch (f) {
@@ -156,11 +161,21 @@ static PipeKey pipe_key(void) {
     return k;
 }
 
-static SDL_GPUGraphicsPipeline* get_pipeline(PipeKey k) {
-    auto it = sPipelines.find(k.bits);
+// The pipeline for state k with pixel shader ps: the ubershader (specId 0)
+// or specialized shader specId. Specialized ones are created within the
+// main thread's budget (gx_spec_budget_left): NULL when it is spent (the draw
+// falls back to the ubershader; asked again later) or creation failed.
+static SDL_GPUGraphicsPipeline* get_pipeline(PipeKey k, u32 specId = 0, SDL_GPUShader* ps = NULL,
+                                             bool remember = true) {
+    u64 mapKey = (u64)specId << 32 | k.bits;
+    auto it = sPipelines.find(mapKey);
     if (it != sPipelines.end()) {
         return it->second;
     }
+    if (specId != 0 && !gx_spec_budget_left()) {
+        return NULL;
+    }
+    Uint64 start = SDL_GetTicksNS();
 
     SDL_GPUVertexBufferDescription vb = {};
     vb.slot = 0;
@@ -196,7 +211,7 @@ static SDL_GPUGraphicsPipeline* get_pipeline(PipeKey k) {
 
     SDL_GPUGraphicsPipelineCreateInfo pi = {};
     pi.vertex_shader = sVS;
-    pi.fragment_shader = sPS;
+    pi.fragment_shader = specId != 0 ? ps : sPS;
     pi.vertex_input_state.vertex_buffer_descriptions = &vb;
     pi.vertex_input_state.num_vertex_buffers = 1;
     pi.vertex_input_state.vertex_attributes = attrs;
@@ -223,9 +238,16 @@ static SDL_GPUGraphicsPipeline* get_pipeline(PipeKey k) {
 
     SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(sDev, &pi);
     if (p == NULL) {
-        port_log("gx: pipeline %08lx failed: %s\n", (unsigned long)k.bits, SDL_GetError());
+        port_log("gx: pipeline %08lx (shader %lu) failed: %s\n", (unsigned long)k.bits, (unsigned long)specId,
+                 SDL_GetError());
     }
-    sPipelines[k.bits] = p;
+    sPipelines[mapKey] = p;
+    if (specId != 0) {
+        gx_spec_budget_charge(SDL_GetTicksNS() - start);
+        if (p != NULL && remember) {
+            gx_spec_pipeline_created(specId, k.bits);
+        }
+    }
     return p;
 }
 
@@ -523,12 +545,6 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     if (d.count == 0) {
         return;
     }
-    d.pipe = get_pipeline(pipe_key());
-    if (d.pipe == NULL) {
-        sVerts.resize(d.first);
-        return;
-    }
-
     u32 used;
     fill_tev(&d.tev, &used);
     for (int m = 0; m < 8; m++) {
@@ -560,6 +576,23 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
         GXTexDesc white = {};
         d.tex[m].texture = sWhite;
         d.tex[m].sampler = get_sampler(white);
+    }
+
+    // The pixel shader: the specialized one for this TEV state once it is
+    // ready (and its pipeline exists), else the ubershader.
+    PipeKey pk = pipe_key();
+    SDL_GPUShader* specPS = NULL;
+    u32 specId = gx_spec_lookup(d.tev, &specPS);
+    d.pipe = specPS != NULL ? get_pipeline(pk, specId, specPS) : NULL;
+    if (specId != 0) {
+        gx_spec_count_draw(specId, d.pipe != NULL);
+    }
+    if (d.pipe == NULL) {
+        d.pipe = get_pipeline(pk);
+    }
+    if (d.pipe == NULL) {
+        sVerts.resize(d.first);
+        return;
     }
 
     // Scissor: BP 0x20 top (bits 0-10) / left (12-22), 0x21 bottom / right,
@@ -900,6 +933,42 @@ static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
     SDL_ReleaseGPUTransferBuffer(sDev, tb);
 }
 
+// Testing: FORECAST_GPU_TIME=1 waits for each frame's command buffer and
+// logs the average time from submitting it to its completion (the GPU's
+// work for the frame, as the CPU no longer overlaps it) every 120 frames.
+static bool sGpuTime;
+static Uint64 sGpuNS, sGpuMaxNS;
+static u32 sGpuFrames;
+
+static void submit_timed(SDL_GPUCommandBuffer* cb) {
+    Uint64 t0 = SDL_GetTicksNS();
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cb);
+    if (fence != NULL) {
+        SDL_WaitForGPUFences(sDev, true, &fence, 1);
+        SDL_ReleaseGPUFence(sDev, fence);
+    }
+    Uint64 ns = SDL_GetTicksNS() - t0;
+    sGpuNS += ns;
+    if (ns > sGpuMaxNS) {
+        sGpuMaxNS = ns;
+    }
+    if (++sGpuFrames == 120) {
+        port_log("gx: gpu frame %lu: %.3f ms average, %.3f ms max (submit to completion, %u frames)\n",
+                 (unsigned long)sFrame + 1, (double)sGpuNS / sGpuFrames / 1e6, (double)sGpuMaxNS / 1e6,
+                 (unsigned)sGpuFrames);
+        sGpuNS = sGpuMaxNS = 0;
+        sGpuFrames = 0;
+    }
+}
+
+// Pre-creates a pipeline remembered from an earlier run (gx_spec_frame_end).
+static bool make_spec_pipe(u32 id, SDL_GPUShader* ps, u32 bits) {
+    PipeKey k;
+    k.bits = bits;
+    get_pipeline(k, id, ps, false);
+    return true;
+}
+
 extern "C" void port_gx_present(void) {
     // Submit time, without the wait for the window's image (reported apart).
     Uint64 submitStart = SDL_GetTicksNS();
@@ -914,6 +983,8 @@ extern "C" void port_gx_present(void) {
         present(cb);
         if (dump_requested(sFrame + 1)) {
             dump_efb(cb, sFrame + 1);
+        } else if (sGpuTime) {
+            submit_timed(cb);
         } else {
             SDL_SubmitGPUCommandBuffer(cb);
         }
@@ -925,6 +996,14 @@ extern "C" void port_gx_present(void) {
     sRetired.clear();
 
     sFrame++;
+    gx_spec_frame_end(sFrame, make_spec_pipe, dump_requested(sFrame));
+    // Testing: FORECAST_QUIT_FRAME=n quits after frame n.
+    static const char* sQuit = SDL_getenv("FORECAST_QUIT_FRAME");
+    if (sQuit != NULL && (u32)SDL_atoi(sQuit) == sFrame) {
+        port_log("gx: quitting after frame %lu (FORECAST_QUIT_FRAME)\n", (unsigned long)sFrame);
+        port_platform_quit();
+        exit(0);
+    }
     if (sFrame <= 3 || sFrame % 600 == 0) {
         u64 texBytes = 0;
         for (const auto& kv : sTextures) {
@@ -1073,6 +1152,8 @@ extern "C" void port_gx_backend_init(void) {
     if (sVS == NULL || sPS == NULL) {
         abort();
     }
+    gx_spec_init(sDev);
+    sGpuTime = SDL_getenv("FORECAST_GPU_TIME") != NULL && SDL_atoi(SDL_getenv("FORECAST_GPU_TIME")) != 0;
 
     // The 1x1 white texture bound to unused maps.
     static const u8 white[4] = {255, 255, 255, 255};
