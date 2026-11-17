@@ -211,17 +211,101 @@ s32 gx_texpack_lookup(u32 fmt, u32 w, u32 h, bool mipmaps, const u8* texels, u32
     return n;
 }
 
-SDL_Surface* gx_texpack_load(s32 id) {
-    if (id < 0 || (size_t)id >= sPaths.size()) {
-        return nullptr;
-    }
-    SDL_Surface* s = SDL_LoadPNG(sPaths[id].c_str());
+// --- loading on worker threads ---------------------------------------------------
+//
+// Decoding a 2048x2048 PNG takes tens of milliseconds, so replacements are
+// loaded by worker threads: the renderer asks for one (gx_texpack_request),
+// keeps drawing the original texture, and picks the replacement up once it
+// is ready (gx_texpack_take).
+
+namespace {
+
+const int kWorkers = 2;
+
+SDL_Mutex* sLock;
+SDL_Condition* sWake;
+std::vector<std::pair<s32, std::string>> sQueue; // (id, path) waiting for a worker
+std::unordered_map<s32, SDL_Surface*> sReady;     // decoded, not yet taken
+std::unordered_map<s32, bool> sInFlight;          // queued or being decoded
+
+SDL_Surface* load_png(const std::string& path) {
+    SDL_Surface* s = SDL_LoadPNG(path.c_str());
     if (s == nullptr) {
-        port_log("texpack: cannot load %s: %s\n", sPaths[id].c_str(), SDL_GetError());
+        port_log("texpack: cannot load %s: %s\n", path.c_str(), SDL_GetError());
         return nullptr;
     }
     // Bytes R, G, B, A in memory, as the GPU texture expects.
     SDL_Surface* rgba = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ABGR8888);
     SDL_DestroySurface(s);
     return rgba;
+}
+
+int SDLCALL worker(void* unused) {
+    (void)unused;
+    for (;;) {
+        SDL_LockMutex(sLock);
+        while (sQueue.empty()) {
+            SDL_WaitCondition(sWake, sLock);
+        }
+        s32 id = sQueue.front().first;
+        std::string path = sQueue.front().second;
+        sQueue.erase(sQueue.begin());
+        SDL_UnlockMutex(sLock);
+
+        SDL_Surface* s = load_png(path);
+
+        SDL_LockMutex(sLock);
+        sInFlight.erase(id);
+        if (s != nullptr) {
+            sReady[id] = s;
+        }
+        SDL_UnlockMutex(sLock);
+    }
+    return 0;
+}
+
+void start_workers(void) {
+    sLock = SDL_CreateMutex();
+    sWake = SDL_CreateCondition();
+    for (int i = 0; i < kWorkers; i++) {
+        SDL_Thread* t = SDL_CreateThread(worker, "texpack", nullptr);
+        if (t == nullptr) {
+            port_log("texpack: worker thread failed: %s\n", SDL_GetError());
+        } else {
+            SDL_DetachThread(t);
+        }
+    }
+}
+
+} // namespace
+
+void gx_texpack_request(s32 id) {
+    if (id < 0 || (size_t)id >= sPaths.size()) {
+        return;
+    }
+    if (sLock == nullptr) {
+        start_workers();
+    }
+    SDL_LockMutex(sLock);
+    if (sReady.find(id) == sReady.end() && sInFlight.find(id) == sInFlight.end()) {
+        sInFlight[id] = true;
+        sQueue.emplace_back(id, sPaths[id]);
+        SDL_SignalCondition(sWake);
+    }
+    SDL_UnlockMutex(sLock);
+}
+
+SDL_Surface* gx_texpack_take(s32 id) {
+    if (sLock == nullptr) {
+        return nullptr;
+    }
+    SDL_Surface* s = nullptr;
+    SDL_LockMutex(sLock);
+    auto it = sReady.find(id);
+    if (it != sReady.end()) {
+        s = it->second;
+        sReady.erase(it);
+    }
+    SDL_UnlockMutex(sLock);
+    return s;
 }

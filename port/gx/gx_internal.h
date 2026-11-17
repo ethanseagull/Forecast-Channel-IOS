@@ -195,8 +195,12 @@ struct SDL_Surface;
 // Returns a replacement id or -1.
 s32 gx_texpack_lookup(u32 fmt, u32 w, u32 h, bool mipmaps, const u8* texels, u32 size, const u8* pal,
                       u32 palEntries);
-// Loads a replacement as RGBA8 (bytes R, G, B, A). The caller destroys it.
-SDL_Surface* gx_texpack_load(s32 id);
+// Queues a replacement for loading on a worker thread (no-op if it is
+// already queued or loaded).
+void gx_texpack_request(s32 id);
+// The replacement as RGBA8 (bytes R, G, B, A) once a worker has decoded it,
+// else NULL. The caller takes ownership and destroys it.
+SDL_Surface* gx_texpack_take(s32 id);
 
 // Looks up the texture in map 0-7. False if the map has no usable texture.
 bool gx_tex_get(int map, GXTexDesc* out);

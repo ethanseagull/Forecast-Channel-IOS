@@ -235,6 +235,7 @@ struct BackendTex {
     u32 version;
     SDL_GPUTexture* tex;
     u32 lastFrame;
+    s32 waiting = -1; // texture pack replacement still being loaded
 };
 
 struct PendingUpload {
@@ -273,40 +274,51 @@ static void queue_upload(SDL_GPUTexture* tex, const u8* rgba, u32 w, u32 h) {
 
 // The GPU copy of the texture in map `map` (described by d), uploading the
 // version the GPU lacks.
+// Replaces t's GPU texture with a new one holding w x h RGBA8 pixels (rows
+// pitch bytes apart).
+static void replace_gpu_texture(BackendTex& t, const u8* px, u32 w, u32 h, u32 pitch) {
+    if (t.tex != NULL) {
+        sRetired.push_back(t.tex);
+    }
+    t.tex = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    if (t.tex == NULL) {
+        port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)w, (unsigned long)h, SDL_GetError());
+    } else if (pitch == w * 4) {
+        queue_upload(t.tex, px, w, h);
+    } else {
+        // Padded rows: copy them packed.
+        std::vector<u8> packed((size_t)w * h * 4);
+        for (u32 y = 0; y < h; y++) {
+            memcpy(&packed[(size_t)y * w * 4], px + (size_t)y * pitch, (size_t)w * 4);
+        }
+        queue_upload(t.tex, packed.data(), w, h);
+    }
+}
+
+// The GPU copy of the texture in map `map` (described by d), uploading the
+// version the GPU lacks. A texture pack replacement is loaded on a worker
+// thread: the decoded Wii image is drawn until it arrives, then swapped for
+// it (any size: sampling is normalized).
 static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
     BackendTex& t = sTextures[d.key];
     if (t.tex == NULL || t.version != d.version) {
-        // A texture pack replacement (any size: sampling is normalized), else
-        // the decoded Wii image.
-        SDL_Surface* rep = d.replace >= 0 ? gx_texpack_load(d.replace) : NULL;
-        const u8* px = rep != NULL ? NULL : gx_tex_pixels(map);
-        if (rep == NULL && px == NULL) {
+        const u8* px = gx_tex_pixels(map);
+        if (px == NULL) {
             return NULL;
         }
-        u32 w = rep != NULL ? (u32)rep->w : d.width, h = rep != NULL ? (u32)rep->h : d.height;
-        if (t.tex != NULL) {
-            sRetired.push_back(t.tex);
-        }
-        t.tex = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        replace_gpu_texture(t, px, d.width, d.height, d.width * 4);
         t.version = d.version;
-        if (t.tex == NULL) {
-            port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)w, (unsigned long)h, SDL_GetError());
-        } else if (rep != NULL) {
-            // Rows may be padded: copy them packed.
-            if ((u32)rep->pitch == w * 4) {
-                queue_upload(t.tex, (const u8*)rep->pixels, w, h);
-            } else {
-                std::vector<u8> packed((size_t)w * h * 4);
-                for (u32 y = 0; y < h; y++) {
-                    memcpy(&packed[(size_t)y * w * 4], (const u8*)rep->pixels + (size_t)y * rep->pitch, (size_t)w * 4);
-                }
-                queue_upload(t.tex, packed.data(), w, h);
-            }
-        } else {
-            queue_upload(t.tex, px, w, h);
+        t.waiting = d.replace;
+        if (d.replace >= 0) {
+            gx_texpack_request(d.replace);
         }
+    }
+    if (t.waiting >= 0) {
+        SDL_Surface* rep = gx_texpack_take(t.waiting);
         if (rep != NULL) {
+            replace_gpu_texture(t, (const u8*)rep->pixels, (u32)rep->w, (u32)rep->h, (u32)rep->pitch);
             SDL_DestroySurface(rep);
+            t.waiting = -1;
         }
     }
     t.lastFrame = sFrame;

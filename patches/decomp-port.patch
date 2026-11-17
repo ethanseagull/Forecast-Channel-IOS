@@ -1,4 +1,19 @@
-﻿diff --git a/include/macros.h b/include/macros.h
+﻿diff --git a/include/channel/WeatherScene.h b/include/channel/WeatherScene.h
+index b26a3bd..9399170 100644
+--- a/include/channel/WeatherScene.h
++++ b/include/channel/WeatherScene.h
+@@ -109,7 +109,9 @@ struct ButtonStateColors {
+ // The colors of one LayoutButton type (size 0x3C). 4-byte aligned: tables of it
+ // copy their first color as one word (LayoutButton's sDefaultColors __sinit).
+ struct ButtonColors {
+-#ifdef NW4R_HEADER_DECLARATIONS_ONLY
++// The Wii build relies on another unit emitting the out-of-line copy; an
++// optimised host build inlines it everywhere, so the port always defines it.
++#if defined(NW4R_HEADER_DECLARATIONS_ONLY) && !defined(FORECAST_PORT)
+     ~ButtonColors();
+ #else
+     ~ButtonColors() {}
+diff --git a/include/macros.h b/include/macros.h
 index 23a63c4..cdb8a36 100644
 --- a/include/macros.h
 +++ b/include/macros.h

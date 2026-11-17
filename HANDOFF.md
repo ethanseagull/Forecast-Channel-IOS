@@ -106,10 +106,10 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 2. **Milestone 4 loose ends.** Compare with Dolphin (same WiiLink-patched
    channel): the globe's water and relief shading (indirect texturing and
    environment texgens, judged by eye only), and the left part of the forecast
-   pages' title belt, which looked empty in dumps. Texture packs load on the
-   main thread when a texture first appears: the first seconds run at ~43 fps
-   while the 2048x2048 Earth PNGs decode; load them on a worker thread (draw
-   the original until the replacement is ready).
+   pages' title belt, which looked empty in dumps.
+   Performance (Release, this PC): 60 fps, about 30% of each frame busy in the
+   globe scene, with or without texture packs. Measure in Release: Debug (-O0)
+   is 2-3x slower and shows the globe near its frame budget.
    Renderer gaps that log once if used: fog, z textures, EFB-copy format
    conversion, logic ops, the indirect "unmodified texcoord for LOD" bit
    (textures have 1 mip level).

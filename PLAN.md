@@ -222,6 +222,8 @@ satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
   (SDL_LoadPNG) at its own size instead of the decoded image. With the user's WiiPC-Forecast and
   WiiPC-Earth packs installed locally, ~50 textures are replaced in a session, all 28 Earth
   tiles among them. `FORECAST_NO_TEXPACKS=1` turns them off. DDS packs are not read.
+  PNGs decode on two worker threads; the original texture is drawn until its replacement is
+  ready (no frame-rate cost measured in Release).
 - Input: keys for the Remote's other buttons (`kpad.c`); `FORECAST_BUTTON` for scripted runs.
 
 Off on the port (each marked in the source):
