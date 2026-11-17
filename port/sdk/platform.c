@@ -18,6 +18,11 @@ static bool sPointerDown, sPointerInside;
 #define FRAME_NS (1000000000ull / 60)
 
 bool port_platform_init(void) {
+    // iOS: the home indicator is dimmed and the first swipe up from the
+    // bottom edge only brings it back (a second one goes home), so taps on the
+    // bottom button row cannot leave the app by accident ("1" would hide it
+    // until any touch, which brings it back at every tap).
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         port_log("SDL_Init failed: %s\n", SDL_GetError());
         return false;
@@ -30,7 +35,19 @@ bool port_platform_init(void) {
     if (hidden != NULL && hidden[0] == '1') {
         flags |= SDL_WINDOW_HIDDEN;
     }
-    sWindow = SDL_CreateWindow("Forecast Channel", 1280, 720, flags);
+    // FORECAST_WINDOW=WxH: another initial size (e.g. 1704x786, an iPhone's
+    // 19.5:9, to test the screen fill). iOS sizes the window itself.
+    int winW = 1280, winH = 720;
+    const char* size = SDL_getenv("FORECAST_WINDOW");
+    if (size != NULL && SDL_sscanf(size, "%dx%d", &winW, &winH) != 2) {
+        winW = 1280;
+        winH = 720;
+    }
+    if (winW < 64 || winH < 64) {
+        winW = 1280;
+        winH = 720;
+    }
+    sWindow = SDL_CreateWindow("Forecast Channel", winW, winH, flags);
     if (sWindow == NULL) {
         port_log("SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
@@ -187,6 +204,77 @@ void port_perf_add(int bucket, uint64_t ns) {
     if (bucket >= 0 && bucket < PORT_PERF_COUNT) {
         sPerf[bucket] += ns;
     }
+}
+
+// The Wii's display is 16:9 (SCGetAspectRatio says wide); the fill beside it
+// stops at 21:9.
+#define DISPLAY_ASPECT (16.0f / 9.0f)
+#define FILL_ASPECT (21.0f / 9.0f)
+
+void port_display_layout(float width, float height, PortDisplay* d) {
+    SDL_zerop(d);
+    if (width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+    // The safe area's horizontal extent, scaled to the drawable's units.
+    float sx0 = 0.0f, sx1 = width;
+    int ww = 0, wh = 0;
+    SDL_Rect safe;
+    if (sWindow != NULL && SDL_GetWindowSize(sWindow, &ww, &wh) && ww > 0 && SDL_GetWindowSafeArea(sWindow, &safe) &&
+        safe.w > 0 && (safe.x > 0 || safe.w < ww)) {
+        float s = width / (float)ww;
+        sx0 = SDL_max(0.0f, (float)safe.x * s);
+        sx1 = SDL_min(width, (float)(safe.x + safe.w) * s);
+    }
+    // The frame, as before: the largest 16:9 rectangle, centred (the same
+    // float operations as the old present, so a 16:9 window shows the same
+    // pixels), then narrowed to the safe area if needed.
+    float dw = width, dh = height;
+    if (dw / dh > DISPLAY_ASPECT) {
+        dw = dh * DISPLAY_ASPECT;
+    } else {
+        dh = dw / DISPLAY_ASPECT;
+    }
+    if (dw > sx1 - sx0) {
+        dw = sx1 - sx0;
+        dh = dw / DISPLAY_ASPECT;
+    }
+    float x = (width - dw) * 0.5f;
+    if (x < sx0) {
+        x = sx0;
+    }
+    if (x + dw > sx1) {
+        x = sx1 - dw;
+    }
+    d->x = x;
+    d->y = (height - dh) * 0.5f;
+    d->w = dw;
+    d->h = dh;
+
+    static int sFill = -1;
+    if (sFill < 0) {
+        const char* f = SDL_getenv("FORECAST_FILL");
+        sFill = f != NULL && f[0] == '0' ? 0 : 1;
+    }
+    if (sFill) {
+        float maxSide = dh * (FILL_ASPECT - DISPLAY_ASPECT) * 0.5f;
+        float left = SDL_min(x, maxSide), right = SDL_min(width - (x + dw), maxSide);
+        // Rounding slack of a 16:9 window is no fill.
+        float minSide = dh * 0.005f;
+        d->fillLeft = left >= minSide ? left : 0.0f;
+        d->fillRight = right >= minSide ? right : 0.0f;
+    }
+}
+
+void port_display_rect(float* x, float* y, float* w, float* h) {
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(sWindow, &ww, &wh);
+    PortDisplay d;
+    port_display_layout((float)ww, (float)wh, &d);
+    *x = d.x;
+    *y = d.y;
+    *w = d.w;
+    *h = d.h;
 }
 
 void port_pointer(float* x, float* y, bool* down, bool* inside) {

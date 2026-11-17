@@ -1,8 +1,9 @@
 #!/bin/sh
 # Generates the Metal shaders (MSL) from the HLSL in port/gx/shaders, for the
 # Apple builds: HLSL -> SPIR-V (glslang's HLSL front end) -> MSL (SPIRV-Cross).
-# Output: <outdir>/gx_shaders_msl.h with gx_vs_msl[] and gx_ps_msl[] as text,
-# and the same as gx_vs.metal / gx_ps.metal (for the CI's shader checks).
+# Output: <outdir>/gx_shaders_msl.h with gx_vs_msl[], gx_ps_msl[] and
+# gx_present_ps_msl[] as text, and the same as .metal files (for the CI's
+# shader checks).
 #
 #   tools/build_shaders_msl.sh <outdir> [ios|macos]
 #
@@ -11,8 +12,9 @@
 # Resource bindings: SPIRV-Cross numbers Metal textures, samplers and buffers
 # in declaration order per kind, which is what SDL GPU expects for MSL: the
 # pixel shader's gxTex0-7 / gxSmp0-7 become texture(0-7) / sampler(0-7) and
-# its one cbuffer buffer(0). Vertex inputs keep their locations as
-# attribute(n). Entry points are renamed main0.
+# its one cbuffer buffer(0); gx_present_ps's efbTex / efbSmp texture(0) /
+# sampler(0). Vertex inputs keep their locations as attribute(n). Entry
+# points are renamed main0.
 set -eu
 out=${1:?usage: build_shaders_msl.sh <outdir> [ios|macos]}
 platform=${2:-ios}
@@ -33,6 +35,7 @@ compile() { # name stage
 }
 compile gx_vs vert
 compile gx_ps frag
+compile gx_present_ps frag
 
 python3 - "$tmp" "$out/gx_shaders_msl.h" <<'EOF'
 import sys
@@ -48,8 +51,9 @@ with open(out, 'w') as f:
     f.write('#ifndef GX_SHADERS_MSL_H\n#define GX_SHADERS_MSL_H\n')
     f.write(arr('gx_vs_msl', tmp + '/gx_vs.metal'))
     f.write(arr('gx_ps_msl', tmp + '/gx_ps.metal'))
+    f.write(arr('gx_present_ps_msl', tmp + '/gx_present_ps.metal'))
     f.write('#endif\n')
 EOF
-cp "$tmp/gx_vs.metal" "$tmp/gx_ps.metal" "$out/"
+cp "$tmp/gx_vs.metal" "$tmp/gx_ps.metal" "$tmp/gx_present_ps.metal" "$out/"
 echo "MSL shaders -> $out/gx_shaders_msl.h"
 rm -rf "$tmp"

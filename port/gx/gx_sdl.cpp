@@ -9,7 +9,9 @@
 // to the display (GXCopyDisp) ends the frame: one copy pass uploads the
 // vertices and new textures, one render pass replays the draws into the EFB
 // (a render target at a multiple of the Wii's resolution), and the EFB is
-// scaled onto the window.
+// scaled onto the window (with the screen fill beside it on screens wider than
+// 16:9: "screen fill" below).
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,6 +35,8 @@
 #define GX_VS_SIZE (sizeof(gx_vs_msl) - 1)
 #define GX_PS_CODE gx_ps_msl
 #define GX_PS_SIZE (sizeof(gx_ps_msl) - 1)
+#define GX_PRESENT_PS_CODE gx_present_ps_msl
+#define GX_PRESENT_PS_SIZE (sizeof(gx_present_ps_msl) - 1)
 #else
 #include "shaders/gx_shaders_dxil.h"
 #define GX_SHADER_FORMAT SDL_GPU_SHADERFORMAT_DXIL
@@ -41,6 +45,8 @@
 #define GX_VS_SIZE sizeof(gx_vs_dxil)
 #define GX_PS_CODE gx_ps_dxil
 #define GX_PS_SIZE sizeof(gx_ps_dxil)
+#define GX_PRESENT_PS_CODE gx_present_ps_dxil
+#define GX_PRESENT_PS_SIZE sizeof(gx_present_ps_dxil)
 #endif
 #include <port_log.h>
 #include <port_platform.h>
@@ -55,18 +61,22 @@
     } while (0)
 
 // The Wii's display is 16:9 (SCGetAspectRatio says wide): the EFB is drawn
-// anamorphically and stretched, as the TV would.
-#define DISPLAY_ASPECT (16.0f / 9.0f)
+// anamorphically and stretched, as the TV would, into the frame
+// port_display_layout (port/sdk/platform.c) places on the window.
 
 static SDL_GPUDevice* sDev;
 static SDL_GPUShader* sVS;
 static SDL_GPUShader* sPS;
 static SDL_GPUTextureFormat sDepthFmt;
 
-// The EFB: colour and depth targets at sScale times the Wii's size.
+// The EFB: colour and depth targets at sScale times the Wii's size, plus
+// sMargin EFB pixels left and right of it when the screen is wider than 16:9
+// (see "Screen fill" below). The game's EFB starts at x = sMargin.
 static SDL_GPUTexture* sEfbColor;
 static SDL_GPUTexture* sEfbDepth;
 static u32 sEfbW, sEfbH, sScale;
+static u32 sMargin;
+static f32 sWideK = 1.0f; // sEfbW / (sEfbW + 2 * sMargin)
 static bool sClearNext = true;
 static SDL_FColor sClearColor;
 static f32 sClearDepth = 1.0f;
@@ -161,6 +171,21 @@ static PipeKey pipe_key(void) {
     return k;
 }
 
+// The vertex input of gx_vs.hlsl: one buffer of GXVtxOut.
+static void vertex_input(SDL_GPUVertexBufferDescription* vb, SDL_GPUVertexAttribute attrs[11]) {
+    *vb = {};
+    vb->slot = 0;
+    vb->pitch = sizeof(GXVtxOut);
+    vb->input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+    attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, pos)};
+    attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, clr[0])};
+    attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, clr[1])};
+    for (int i = 0; i < 8; i++) {
+        attrs[3 + i] = {(Uint32)(3 + i), 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+                        (Uint32)(offsetof(GXVtxOut, tex) + i * 3 * sizeof(f32))};
+    }
+}
+
 // The pipeline for state k with pixel shader ps: the ubershader (specId 0)
 // or specialized shader specId. Specialized ones are created within the
 // main thread's budget (gx_spec_budget_left): NULL when it is spent (the draw
@@ -177,18 +202,9 @@ static SDL_GPUGraphicsPipeline* get_pipeline(PipeKey k, u32 specId = 0, SDL_GPUS
     }
     Uint64 start = SDL_GetTicksNS();
 
-    SDL_GPUVertexBufferDescription vb = {};
-    vb.slot = 0;
-    vb.pitch = sizeof(GXVtxOut);
-    vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-    SDL_GPUVertexAttribute attrs[11] = {};
-    attrs[0] = {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, pos)};
-    attrs[1] = {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, clr[0])};
-    attrs[2] = {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, (Uint32)offsetof(GXVtxOut, clr[1])};
-    for (int i = 0; i < 8; i++) {
-        attrs[3 + i] = {(Uint32)(3 + i), 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
-                        (Uint32)(offsetof(GXVtxOut, tex) + i * 3 * sizeof(f32))};
-    }
+    SDL_GPUVertexBufferDescription vb;
+    SDL_GPUVertexAttribute attrs[11];
+    vertex_input(&vb, attrs);
 
     SDL_GPUColorTargetDescription ct = {};
     ct.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -469,7 +485,8 @@ static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
 struct Draw {
     SDL_GPUGraphicsPipeline* pipe;
     u32 first, count;
-    SDL_Rect scissor; // in EFB pixels
+    bool wide;        // drawn across the margins too (x compressed by sWideK)
+    SDL_Rect scissor; // in EFB pixels of the EFB texture (game x + sMargin)
     SDL_GPUTextureSamplerBinding tex[8];
     GXTevUniforms tev;
 };
@@ -524,6 +541,101 @@ static void fill_tev(GXTevUniforms* u, u32* usedMaps) {
     u->alphaCompare = gx.bp[0xF3];
     u->texBound = 0;
     u->pad = 0;
+}
+
+// --- screen fill ------------------------------------------------------------------------
+//
+// A screen wider than 16:9 (an iPhone is 19.5:9) shows the game's frame where
+// it always was (PortDisplay, port_platform.h) and fills the strips beside it,
+// up to 21:9:
+// - 3D scenes (the globe): draws whose XF viewport is the whole EFB are drawn
+//   into an EFB widened by sMargin on both sides, their clip-space x
+//   compressed by sWideK so the frame lands exactly where it was; what lay
+//   outside the original view shows in the margins (Earth, stars). Their
+//   scissor is widened when it covered the frame's width, else it stays in
+//   the frame. This includes 2D (ortho) draws, so the city labels, which are
+//   2D panes placed over the globe, continue past the frame edge instead of
+//   being cut in mid-screen; the buttons and texts of the layouts end at the
+//   frame edge, so they stay where they were (FORECAST_FILL_2D=0 keeps 2D
+//   draws in the frame). Untextured 2D draws over the whole frame (fades,
+//   dimming) are stretched over the margins instead.
+// - 2D screens: the frame's edge columns are stretched over the strips
+//   (clamp to edge), darkened toward the screen edge.
+// A frame is "3D" when it has a widened perspective draw that no later
+// textured 2D draw over the whole frame hides (the forecast pages draw the
+// globe, then a full-screen page over it), counted from the last EFB clear;
+// else "2D". The present cross-fades between the two over FILL_FADE_FRAMES
+// frames, so a scene change does not pop. With a 16:9 window sMargin is 0 and
+// none of this runs: the EFB, viewport and scissors are as before.
+#define FILL_FADE_FRAMES 8
+static bool sFrameWide;  // this frame so far: a widened draw since the last cover / clear
+static f32 sWideness;    // as presented: 0 edge extension .. 1 the 3D margins
+
+// Applies the fill to the draw just recorded (its vertices transformed, its
+// game scissor left / top / right / bottom, the texture maps its TEV reads
+// usedMaps): widens it or keeps it in the frame, and notes what the frame
+// looks like.
+static void fill_draw(Draw& d, int left, int top, int right, int bottom, u32 usedMaps) {
+    int efbW = (int)sEfbW, efbH = (int)sEfbH, m = (int)sMargin;
+    d.wide = false;
+    if (m == 0) {
+        d.scissor.x = left;
+        d.scissor.w = right > left ? right - left : 0;
+        return;
+    }
+    static int sWiden2D = -1;
+    if (sWiden2D < 0) {
+        const char* e = SDL_getenv("FORECAST_FILL_2D");
+        sWiden2D = e == NULL || e[0] != '0';
+    }
+    bool ortho = gx.xfReg[0x26] != 0;
+    bool fullScissor = left <= 0 && right >= efbW;
+    // The XF viewport (as gx_xform.cpp decodes it) spans the EFB width.
+    f32 sx = gx_xf_float(0x101A), ox = gx_xf_float(0x101D) - 342.0f;
+    bool fullViewport = fabsf(2.0f * sx - (f32)efbW) < 1.0f && fabsf(ox - 0.5f * (f32)efbW) < 1.0f;
+    bool stretch = false;
+    if (ortho && fullScissor && top <= 0 && bottom >= efbH) {
+        f32 x0 = 1.0f, x1 = -1.0f, y0 = 1.0f, y1 = -1.0f;
+        const GXVtxOut* v = &sVerts[d.first];
+        for (u32 i = 0; i < d.count; i++) {
+            x0 = SDL_min(x0, v[i].pos[0]);
+            x1 = SDL_max(x1, v[i].pos[0]);
+            y0 = SDL_min(y0, v[i].pos[1]);
+            y1 = SDL_max(y1, v[i].pos[1]);
+        }
+        const f32 e = 0.995f;
+        if (x0 <= -e && x1 >= e && y0 <= -e && y1 >= e) {
+            if (usedMaps == 0) {
+                // Untextured over the whole frame: a fade or dimming layer.
+                // Stretched over the margins too (it is one colour, or a
+                // gradient), so the 3D margins fade with the frame.
+                stretch = true;
+            } else {
+                // A 2D picture over the whole frame (a page's background)
+                // hides the 3D under it: edge extension.
+                sFrameWide = false;
+            }
+        }
+    }
+    if (stretch) {
+        d.wide = true;
+    } else if ((!ortho || sWiden2D) && fullViewport) {
+        d.wide = true;
+        GXVtxOut* v = &sVerts[d.first];
+        for (u32 i = 0; i < d.count; i++) {
+            v[i].pos[0] *= sWideK;
+        }
+        if (!ortho) {
+            sFrameWide = true;
+        }
+    }
+    if (d.wide && fullScissor) {
+        d.scissor.x = 0;
+        d.scissor.w = efbW + 2 * m;
+    } else {
+        d.scissor.x = left + m;
+        d.scissor.w = right > left ? right - left : 0;
+    }
 }
 
 // Adds the time from construction to destruction to a port_perf_add bucket.
@@ -607,10 +719,9 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     if (top < 0) {
         top = 0;
     }
-    d.scissor.x = left;
     d.scissor.y = top;
-    d.scissor.w = right > left ? right - left : 0;
     d.scissor.h = bottom > top ? bottom - top : 0;
+    fill_draw(d, left, top, right, bottom, used); // sets the scissor's x and w
 
     if (gx_bits(gx.bp[0xF1], 21, 3) != 0) {
         WARN_ONCE("gx: fog not supported yet\n");
@@ -679,7 +790,23 @@ static void ensure_efb(void) {
     if (scale > 4) {
         scale = 4;
     }
-    if (sEfbColor != NULL && w == sEfbW && h == sEfbH && scale == sScale) {
+    // Screen fill: margins as wide as the wider strip beside the frame, in
+    // EFB pixels (the frame shows w EFB pixels across d.w).
+    u32 margin = 0;
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(port_window(), &ww, &wh);
+    PortDisplay d;
+    port_display_layout((f32)ww, (f32)wh, &d);
+    if (d.w > 0.0f) {
+        f32 side = SDL_max(d.fillLeft, d.fillRight);
+        margin = (u32)SDL_ceilf(side / d.w * (f32)w);
+        // 21:9 at most (port_display_layout caps the fill there already).
+        u32 maxMargin = (u32)SDL_ceilf((f32)w * (21.0f / 16.0f - 1.0f) * 0.5f);
+        if (margin > maxMargin) {
+            margin = maxMargin;
+        }
+    }
+    if (sEfbColor != NULL && w == sEfbW && h == sEfbH && scale == sScale && margin == sMargin) {
         return;
     }
     if (sEfbColor != NULL) {
@@ -689,12 +816,15 @@ static void ensure_efb(void) {
     sEfbW = w;
     sEfbH = h;
     sScale = scale;
-    sEfbColor = create_texture(w * scale, h * scale, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+    sMargin = margin;
+    sWideK = (f32)w / (f32)(w + 2 * margin);
+    u32 tw = (w + 2 * margin) * scale;
+    sEfbColor = create_texture(tw, h * scale, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    sEfbDepth = create_texture(w * scale, h * scale, sDepthFmt, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+    sEfbDepth = create_texture(tw, h * scale, sDepthFmt, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
     sClearNext = true;
-    port_log("gx: EFB %lux%lu at %lux (%lux%lu)\n", (unsigned long)w, (unsigned long)h, (unsigned long)scale,
-             (unsigned long)(w * scale), (unsigned long)(h * scale));
+    port_log("gx: EFB %lux%lu at %lux (%lux%lu), screen fill margins %lu\n", (unsigned long)w, (unsigned long)h,
+             (unsigned long)scale, (unsigned long)tw, (unsigned long)(h * scale), (unsigned long)margin);
 }
 
 static void upload(SDL_GPUCommandBuffer* cb) {
@@ -806,8 +936,13 @@ static void render(SDL_GPUCommandBuffer* cb) {
     sClearNext = false;
 
     SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cb, &ct, 1, &dt);
-    SDL_GPUViewport vp = {0.0f, 0.0f, (f32)(sEfbW * sScale), (f32)(sEfbH * sScale), 0.0f, 1.0f};
-    SDL_SetGPUViewport(rp, &vp);
+    // The game's frame, and with the screen fill the whole widened EFB.
+    const SDL_GPUViewport frameVp = {(f32)(sMargin * sScale), 0.0f, (f32)(sEfbW * sScale), (f32)(sEfbH * sScale),
+                                     0.0f, 1.0f};
+    const SDL_GPUViewport wideVp = {0.0f, 0.0f, (f32)((sEfbW + 2 * sMargin) * sScale), (f32)(sEfbH * sScale), 0.0f,
+                                    1.0f};
+    SDL_SetGPUViewport(rp, &frameVp);
+    bool wideVpSet = false;
     SDL_GPUBufferBinding vb = {sVtxBuf, 0};
     if (sVtxBuf != NULL) {
         SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
@@ -816,7 +951,8 @@ static void render(SDL_GPUCommandBuffer* cb) {
     for (const Draw& d : sDraws) {
         SDL_Rect sc = {d.scissor.x * (int)sScale, d.scissor.y * (int)sScale, d.scissor.w * (int)sScale,
                        d.scissor.h * (int)sScale};
-        int maxW = (int)(sEfbW * sScale), maxH = (int)(sEfbH * sScale);
+        // Right edge: the frame's, or the widened EFB's for widened draws.
+        int maxW = (int)((d.wide ? sEfbW + 2 * sMargin : sEfbW + sMargin) * sScale), maxH = (int)(sEfbH * sScale);
         if (sc.x + sc.w > maxW) {
             sc.w = maxW - sc.x;
         }
@@ -830,6 +966,10 @@ static void render(SDL_GPUCommandBuffer* cb) {
             SDL_BindGPUGraphicsPipeline(rp, d.pipe);
             bound = d.pipe;
         }
+        if (d.wide != wideVpSet) {
+            SDL_SetGPUViewport(rp, d.wide ? &wideVp : &frameVp);
+            wideVpSet = d.wide;
+        }
         SDL_SetGPUScissor(rp, &sc);
         SDL_BindGPUFragmentSamplers(rp, 0, d.tex, 8);
         SDL_PushGPUFragmentUniformData(cb, 0, &d.tev, sizeof(d.tev));
@@ -839,6 +979,186 @@ static void render(SDL_GPUCommandBuffer* cb) {
 }
 
 static Uint64 sAcquireNS; // this frame's wait for the window's image
+static Uint32 sSwapW, sSwapH; // the window's image, last acquired
+
+// --- present ---------------------------------------------------------------------------
+//
+// Without the screen fill the EFB is blitted into the frame (as always).
+// With it, gx_present_ps.hlsl draws textured quads (vertex colour times the
+// EFB): the frame, and in each strip beside it the frame's edge column
+// stretched (darker toward the screen edge) and / or the EFB's margin with
+// the 3D scene, the latter blended in by sWideness.
+
+// The edge extension's colour at the screen edge (1 at the frame).
+#define FILL_EDGE_SHADE 0.8f
+
+static SDL_GPUShader* sPresentPS;
+static SDL_GPUSampler* sPresentSmp;
+static std::unordered_map<int, SDL_GPUGraphicsPipeline*> sPresentPipes; // by target format
+static SDL_GPUBuffer* sPresentBuf;
+static SDL_GPUTransferBuffer* sPresentXfer;
+enum { PRESENT_MAX_VERTS = 5 * 6 };
+
+static SDL_GPUGraphicsPipeline* present_pipeline(SDL_GPUTextureFormat fmt) {
+    if (sPresentPS == NULL) {
+        return NULL;
+    }
+    auto it = sPresentPipes.find((int)fmt);
+    if (it != sPresentPipes.end()) {
+        return it->second;
+    }
+    SDL_GPUVertexBufferDescription vb;
+    SDL_GPUVertexAttribute attrs[11];
+    vertex_input(&vb, attrs);
+    SDL_GPUColorTargetDescription ct = {};
+    ct.format = fmt;
+    SDL_GPUColorTargetBlendState& bs = ct.blend_state;
+    // Colour only: the window's alpha stays as cleared (opaque).
+    bs.enable_color_write_mask = true;
+    bs.color_write_mask = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B;
+    bs.enable_blend = true;
+    bs.color_blend_op = bs.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    bs.src_color_blendfactor = bs.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    bs.dst_color_blendfactor = bs.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    SDL_GPUGraphicsPipelineCreateInfo pi = {};
+    pi.vertex_shader = sVS;
+    pi.fragment_shader = sPresentPS;
+    pi.vertex_input_state.vertex_buffer_descriptions = &vb;
+    pi.vertex_input_state.num_vertex_buffers = 1;
+    pi.vertex_input_state.vertex_attributes = attrs;
+    pi.vertex_input_state.num_vertex_attributes = 11;
+    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    pi.target_info.color_target_descriptions = &ct;
+    pi.target_info.num_color_targets = 1;
+    SDL_GPUGraphicsPipeline* p = SDL_CreateGPUGraphicsPipeline(sDev, &pi);
+    if (p == NULL) {
+        port_log("gx: present pipeline (format %d) failed: %s\n", (int)fmt, SDL_GetError());
+    }
+    sPresentPipes[(int)fmt] = p;
+    return p;
+}
+
+// A quad from target pixels (x0, y0)-(x1, y1), EFB texture coordinates
+// (u0, v0)-(u1, v1) with u clamped to [umin, umax], colour cl on the left
+// edge and cr on the right, alpha a.
+static void present_quad(GXVtxOut* out, f32 tw, f32 th, f32 x0, f32 y0, f32 x1, f32 y1, f32 u0, f32 v0, f32 u1,
+                         f32 v1, f32 umin, f32 umax, f32 cl, f32 cr, f32 a) {
+    GXVtxOut c[4];
+    memset(c, 0, sizeof(c));
+    const f32 xs[4] = {x0, x1, x1, x0}, ys[4] = {y0, y0, y1, y1};
+    const f32 us[4] = {u0, u1, u1, u0}, vs[4] = {v0, v0, v1, v1};
+    const f32 cs[4] = {cl, cr, cr, cl};
+    for (int i = 0; i < 4; i++) {
+        c[i].pos[0] = xs[i] / tw * 2.0f - 1.0f;
+        c[i].pos[1] = 1.0f - ys[i] / th * 2.0f;
+        c[i].pos[2] = 0.0f;
+        c[i].pos[3] = 1.0f;
+        c[i].clr[0][0] = c[i].clr[0][1] = c[i].clr[0][2] = cs[i];
+        c[i].clr[0][3] = a;
+        c[i].tex[0][0] = us[i];
+        c[i].tex[0][1] = vs[i];
+        c[i].tex[0][2] = 1.0f;
+        c[i].tex[1][0] = umin;
+        c[i].tex[1][1] = umax;
+    }
+    static const int idx[6] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 6; i++) {
+        out[i] = c[idx[i]];
+    }
+}
+
+// Draws the EFB onto target (tw x th pixels, format fmt), cleared to black.
+static void compose(SDL_GPUCommandBuffer* cb, SDL_GPUTexture* target, Uint32 tw, Uint32 th,
+                    SDL_GPUTextureFormat fmt) {
+    PortDisplay d;
+    port_display_layout((f32)tw, (f32)th, &d);
+    SDL_GPUColorTargetInfo ct = {};
+    ct.texture = target;
+    ct.load_op = SDL_GPU_LOADOP_CLEAR;
+    ct.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
+    ct.store_op = SDL_GPU_STOREOP_STORE;
+    bool fill = sMargin != 0 && (d.fillLeft > 0.0f || d.fillRight > 0.0f);
+    SDL_GPUGraphicsPipeline* pipe = fill ? present_pipeline(fmt) : NULL;
+    if (pipe == NULL) {
+        // Clear to black, then scale the EFB's frame into the 16:9 rectangle.
+        SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cb, &ct, 1, NULL));
+        SDL_GPUBlitInfo bi = {};
+        bi.source.texture = sEfbColor;
+        bi.source.x = sMargin * sScale;
+        bi.source.w = sEfbW * sScale;
+        bi.source.h = sEfbH * sScale;
+        bi.destination.texture = target;
+        bi.destination.x = (Uint32)d.x;
+        bi.destination.y = (Uint32)d.y;
+        bi.destination.w = (Uint32)d.w;
+        bi.destination.h = (Uint32)d.h;
+        bi.load_op = SDL_GPU_LOADOP_LOAD;
+        bi.filter = SDL_GPU_FILTER_LINEAR;
+        SDL_BlitGPUTexture(cb, &bi);
+        return;
+    }
+
+    // EFB texture coordinates: the frame spans [uf0, uf1]; a strip of width
+    // s pixels beside it shows s / d.w * sEfbW EFB pixels of the margin.
+    f32 W = (f32)(sEfbW + 2 * sMargin), TW = W * (f32)sScale;
+    f32 uf0 = (f32)sMargin / W, uf1 = (f32)(sMargin + sEfbW) / W;
+    f32 uEdge0 = ((f32)(sMargin * sScale) + 0.5f) / TW, uEdge1 = ((f32)((sMargin + sEfbW) * sScale) - 0.5f) / TW;
+    f32 fw = (f32)tw, fh = (f32)th;
+    f32 x0 = d.x, x1 = d.x + d.w, y0 = d.y, y1 = d.y + d.h;
+    f32 lx = x0 - d.fillLeft, rx = x1 + d.fillRight;
+    f32 ul = uf0 - d.fillLeft / d.w * (f32)sEfbW / W, ur = uf1 + d.fillRight / d.w * (f32)sEfbW / W;
+    GXVtxOut v[PRESENT_MAX_VERTS];
+    u32 n = 0;
+    present_quad(&v[n], fw, fh, x0, y0, x1, y1, uf0, 0.0f, uf1, 1.0f, uEdge0, uEdge1, 1.0f, 1.0f, 1.0f);
+    n += 6;
+    f32 wide = sWideness;
+    if (wide < 1.0f) {
+        if (d.fillLeft > 0.0f) {
+            present_quad(&v[n], fw, fh, lx, y0, x0, y1, uEdge0, 0.0f, uEdge0, 1.0f, 0.0f, 1.0f, FILL_EDGE_SHADE, 1.0f,
+                         1.0f);
+            n += 6;
+        }
+        if (d.fillRight > 0.0f) {
+            present_quad(&v[n], fw, fh, x1, y0, rx, y1, uEdge1, 0.0f, uEdge1, 1.0f, 0.0f, 1.0f, 1.0f, FILL_EDGE_SHADE,
+                         1.0f);
+            n += 6;
+        }
+    }
+    if (wide > 0.0f) {
+        if (d.fillLeft > 0.0f) {
+            present_quad(&v[n], fw, fh, lx, y0, x0, y1, ul, 0.0f, uf0, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, wide);
+            n += 6;
+        }
+        if (d.fillRight > 0.0f) {
+            present_quad(&v[n], fw, fh, x1, y0, rx, y1, uf1, 0.0f, ur, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, wide);
+            n += 6;
+        }
+    }
+
+    u32 bytes = n * (u32)sizeof(GXVtxOut);
+    void* map = SDL_MapGPUTransferBuffer(sDev, sPresentXfer, true);
+    if (map == NULL) {
+        return;
+    }
+    memcpy(map, v, bytes);
+    SDL_UnmapGPUTransferBuffer(sDev, sPresentXfer);
+    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cb);
+    SDL_GPUTransferBufferLocation src = {sPresentXfer, 0};
+    SDL_GPUBufferRegion dst = {sPresentBuf, 0, bytes};
+    SDL_UploadToGPUBuffer(cp, &src, &dst, true);
+    SDL_EndGPUCopyPass(cp);
+
+    SDL_GPURenderPass* rp = SDL_BeginGPURenderPass(cb, &ct, 1, NULL);
+    SDL_BindGPUGraphicsPipeline(rp, pipe);
+    SDL_GPUBufferBinding vb = {sPresentBuf, 0};
+    SDL_BindGPUVertexBuffers(rp, 0, &vb, 1);
+    SDL_GPUTextureSamplerBinding tb = {sEfbColor, sPresentSmp};
+    SDL_BindGPUFragmentSamplers(rp, 0, &tb, 1);
+    SDL_DrawGPUPrimitives(rp, n, 1, 0, 0);
+    SDL_EndGPURenderPass(rp);
+}
 
 static void present(SDL_GPUCommandBuffer* cb) {
     SDL_GPUTexture* sw = NULL;
@@ -851,36 +1171,15 @@ static void present(SDL_GPUCommandBuffer* cb) {
     if (!ok || sw == NULL) {
         return; // minimized
     }
-    // Clear to black, then scale the EFB into the largest 16:9 rectangle.
-    SDL_GPUColorTargetInfo ct = {};
-    ct.texture = sw;
-    ct.load_op = SDL_GPU_LOADOP_CLEAR;
-    ct.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
-    ct.store_op = SDL_GPU_STOREOP_STORE;
-    SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cb, &ct, 1, NULL));
-
-    f32 dw = (f32)sw_w, dh = (f32)sw_h;
-    if (dw / dh > DISPLAY_ASPECT) {
-        dw = dh * DISPLAY_ASPECT;
-    } else {
-        dh = dw / DISPLAY_ASPECT;
-    }
-    SDL_GPUBlitInfo bi = {};
-    bi.source.texture = sEfbColor;
-    bi.source.w = sEfbW * sScale;
-    bi.source.h = sEfbH * sScale;
-    bi.destination.texture = sw;
-    bi.destination.x = (Uint32)((sw_w - dw) * 0.5f);
-    bi.destination.y = (Uint32)((sw_h - dh) * 0.5f);
-    bi.destination.w = (Uint32)dw;
-    bi.destination.h = (Uint32)dh;
-    bi.load_op = SDL_GPU_LOADOP_LOAD;
-    bi.filter = SDL_GPU_FILTER_LINEAR;
-    SDL_BlitGPUTexture(cb, &bi);
+    sSwapW = sw_w;
+    sSwapH = sw_h;
+    compose(cb, sw, sw_w, sw_h, SDL_GetGPUSwapchainTextureFormat(sDev, port_window()));
 }
 
 // Debugging: FORECAST_DUMP_FRAME=n[,m...] saves the EFB of those frames as
-// efb_<n>.bmp in the working directory.
+// efb_<n>.bmp in the working directory: the game's 640x456 frame (times the
+// scale), without the screen fill's margins. With the fill, screen_<n>.bmp is
+// what the window shows (the frame and the strips beside it).
 static bool dump_requested(u32 frame) {
     static const char* sList = SDL_getenv("FORECAST_DUMP_FRAME");
     if (sList == NULL) {
@@ -900,37 +1199,80 @@ static bool dump_requested(u32 frame) {
     return false;
 }
 
-static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
-    u32 w = sEfbW * sScale, h = sEfbH * sScale;
-    SDL_GPUTransferBufferCreateInfo ti = {};
-    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-    ti.size = w * h * 4;
-    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
-    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cb);
-    SDL_GPUTextureRegion src = {};
-    src.texture = sEfbColor;
-    src.w = w;
-    src.h = h;
-    src.d = 1;
-    SDL_GPUTextureTransferInfo dst = {};
-    dst.transfer_buffer = tb;
-    SDL_DownloadFromGPUTexture(cp, &src, &dst);
-    SDL_EndGPUCopyPass(cp);
-    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cb);
-    SDL_WaitForGPUFences(sDev, true, &fence, 1);
-    SDL_ReleaseGPUFence(sDev, fence);
+static void save_bmp(SDL_GPUTransferBuffer* tb, u32 w, u32 h, const char* name) {
     void* px = SDL_MapGPUTransferBuffer(sDev, tb, false);
-    SDL_Surface* s = SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, px, (int)(w * 4));
-    char name[64];
-    SDL_snprintf(name, sizeof(name), "efb_%u.bmp", (unsigned)frame);
+    SDL_Surface* s = px != NULL ? SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, px, (int)(w * 4))
+                                : NULL;
     if (s == NULL || !SDL_SaveBMP(s, name)) {
         port_log("gx: dump %s failed: %s\n", name, SDL_GetError());
     } else {
         port_log("gx: dumped %s\n", name);
     }
     SDL_DestroySurface(s);
-    SDL_UnmapGPUTransferBuffer(sDev, tb);
+    if (px != NULL) {
+        SDL_UnmapGPUTransferBuffer(sDev, tb);
+    }
+}
+
+static SDL_GPUTransferBuffer* download(SDL_GPUCopyPass* cp, SDL_GPUTexture* tex, u32 x, u32 w, u32 h) {
+    SDL_GPUTransferBufferCreateInfo ti = {};
+    ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+    ti.size = w * h * 4;
+    SDL_GPUTransferBuffer* tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
+    SDL_GPUTextureRegion src = {};
+    src.texture = tex;
+    src.x = x;
+    src.w = w;
+    src.h = h;
+    src.d = 1;
+    SDL_GPUTextureTransferInfo dst = {};
+    dst.transfer_buffer = tb;
+    SDL_DownloadFromGPUTexture(cp, &src, &dst);
+    return tb;
+}
+
+static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
+    u32 w = sEfbW * sScale, h = sEfbH * sScale;
+    // The screen as the window shows it (its last size, else the window's).
+    SDL_GPUTexture* screen = NULL;
+    u32 sw = sSwapW, sh = sSwapH;
+    if (sMargin != 0) {
+        if (sw == 0 || sh == 0) {
+            int pw = 0, ph = 0;
+            SDL_GetWindowSizeInPixels(port_window(), &pw, &ph);
+            sw = (u32)pw;
+            sh = (u32)ph;
+        }
+        if (sw > 0 && sh > 0) {
+            screen = create_texture(sw, sh, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        }
+        if (screen == NULL) {
+            port_log("gx: no screen dump (%lux%lu): %s\n", (unsigned long)sw, (unsigned long)sh, SDL_GetError());
+        }
+        if (screen != NULL) {
+            compose(cb, screen, sw, sh, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+        }
+    }
+    SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cb);
+    SDL_GPUTransferBuffer* tb = download(cp, sEfbColor, sMargin * sScale, w, h);
+    SDL_GPUTransferBuffer* sb = screen != NULL ? download(cp, screen, 0, sw, sh) : NULL;
+    SDL_EndGPUCopyPass(cp);
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cb);
+    SDL_WaitForGPUFences(sDev, true, &fence, 1);
+    SDL_ReleaseGPUFence(sDev, fence);
+    char name[64];
+    SDL_snprintf(name, sizeof(name), "efb_%u.bmp", (unsigned)frame);
+    save_bmp(tb, w, h, name);
     SDL_ReleaseGPUTransferBuffer(sDev, tb);
+    if (sb != NULL) {
+        SDL_snprintf(name, sizeof(name), "screen_%u.bmp", (unsigned)frame);
+        save_bmp(sb, sw, sh, name);
+        SDL_ReleaseGPUTransferBuffer(sDev, sb);
+    }
+    if (screen != NULL) {
+        SDL_ReleaseGPUTexture(sDev, screen);
+    }
 }
 
 // Testing: FORECAST_GPU_TIME=1 waits for each frame's command buffer and
@@ -978,6 +1320,20 @@ extern "C" void port_gx_present(void) {
         ~SubmitTimer() { port_perf_add(PORT_PERF_SUBMIT, SDL_GetTicksNS() - start - sAcquireNS); }
     } submitTimer{submitStart};
     flush();
+    // Screen fill: move toward this frame's look (3D margins or edge
+    // extension) over FILL_FADE_FRAMES frames.
+    f32 target = sFrameWide ? 1.0f : 0.0f;
+    if (sWideness < target) {
+        sWideness = SDL_min(target, sWideness + 1.0f / FILL_FADE_FRAMES);
+    } else if (sWideness > target) {
+        sWideness = SDL_max(target, sWideness - 1.0f / FILL_FADE_FRAMES);
+    }
+    static const char* sLogFill = SDL_getenv("FORECAST_LOG_FILL");
+    static bool sLastWide;
+    if (sLogFill != NULL && sMargin != 0 && sFrameWide != sLastWide) {
+        port_log("gx: frame %lu: screen fill %s\n", (unsigned long)sFrame + 1, sFrameWide ? "3D" : "edges");
+    }
+    sLastWide = sFrameWide;
     SDL_GPUCommandBuffer* cb = get_cmd();
     if (cb != NULL) {
         present(cb);
@@ -1068,7 +1424,7 @@ static void copy_to_texture(u32 command) {
     }
     SDL_GPUBlitInfo bi = {};
     bi.source.texture = sEfbColor;
-    bi.source.x = x * sScale;
+    bi.source.x = (x + sMargin) * sScale; // game coordinates: the frame, not the margins
     bi.source.y = y * sScale;
     bi.source.w = gw;
     bi.source.h = gh;
@@ -1099,6 +1455,7 @@ void gx_efb_copy(u32 command) {
         sClearColor.a = gx_bits(gx.bp[0x43], 0, 3) == 1 ? (ar >> 8 & 0xFF) / 255.0f : 1.0f;
         sClearDepth = (gx.bp[0x51] & 0xFFFFFF) / 16777215.0f;
         sClearNext = true;
+        sFrameWide = false; // the margins start empty again
     }
 }
 
@@ -1151,6 +1508,28 @@ extern "C" void port_gx_backend_init(void) {
     sPS = make_shader((const u8*)GX_PS_CODE, GX_PS_SIZE, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1);
     if (sVS == NULL || sPS == NULL) {
         abort();
+    }
+    // The screen fill's present (gx_present_ps.hlsl): without it the frame
+    // is still shown, with black bars.
+    sPresentPS = make_shader((const u8*)GX_PRESENT_PS_CODE, GX_PRESENT_PS_SIZE, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0);
+    {
+        SDL_GPUSamplerCreateInfo si = {};
+        si.min_filter = si.mag_filter = SDL_GPU_FILTER_LINEAR;
+        si.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+        si.address_mode_u = si.address_mode_v = si.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        sPresentSmp = SDL_CreateGPUSampler(sDev, &si);
+        SDL_GPUBufferCreateInfo bi = {};
+        bi.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+        bi.size = PRESENT_MAX_VERTS * sizeof(GXVtxOut);
+        sPresentBuf = SDL_CreateGPUBuffer(sDev, &bi);
+        SDL_GPUTransferBufferCreateInfo ti = {};
+        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        ti.size = bi.size;
+        sPresentXfer = SDL_CreateGPUTransferBuffer(sDev, &ti);
+        if (sPresentPS == NULL || sPresentSmp == NULL || sPresentBuf == NULL || sPresentXfer == NULL) {
+            port_log("gx: screen fill present unavailable: %s\n", SDL_GetError());
+            sPresentPS = NULL;
+        }
     }
     gx_spec_init(sDev);
     sGpuTime = SDL_getenv("FORECAST_GPU_TIME") != NULL && SDL_atoi(SDL_getenv("FORECAST_GPU_TIME")) != 0;

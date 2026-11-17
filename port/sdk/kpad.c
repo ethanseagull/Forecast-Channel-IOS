@@ -30,10 +30,6 @@
 
 #include <port_platform.h>
 
-// The displayed EFB: the largest 16:9 rectangle in the window (as in
-// port/gx/gx_sdl.cpp).
-#define DISPLAY_ASPECT (16.0f / 9.0f)
-
 // The pointer was down last frame / one frame of "hover" has been shown.
 static bool sWasDown, sHovered, sShowAfterRelease;
 static u32 sHold;
@@ -164,20 +160,16 @@ void KPADEnableDPD(s32 chan) { (void)chan; }
 
 // Window coordinates -> KPAD pointer position: -1..1 across the displayed
 // frame, x right, y down.
+// The frame's place on screen comes from port_display_rect (platform.c: the
+// safe area and the filled strips beside it); a touch in a strip gives
+// |x| > 1, outside the layout.
 static void window_to_pos(f32 wx, f32 wy, Vec2* pos) {
-    int w = 0, h = 0;
-    SDL_GetWindowSize(port_window(), &w, &h);
-    f32 dw = (f32)w, dh = (f32)h;
+    float x0, y0, dw, dh;
+    port_display_rect(&x0, &y0, &dw, &dh);
     if (dw <= 0.0f || dh <= 0.0f) {
         pos->x = pos->y = 0.0f;
         return;
     }
-    if (dw / dh > DISPLAY_ASPECT) {
-        dw = dh * DISPLAY_ASPECT;
-    } else {
-        dh = dw / DISPLAY_ASPECT;
-    }
-    f32 x0 = ((f32)w - dw) * 0.5f, y0 = ((f32)h - dh) * 0.5f;
     pos->x = (wx - x0) / dw * 2.0f - 1.0f;
     pos->y = (wy - y0) / dh * 2.0f - 1.0f;
 }

@@ -48,7 +48,13 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
   at 0.85:0.9 on the weather pages), `FORECAST_BUTTON=frame:minus|plus|b|home|1|2:frames[;...]`,
   `FORECAST_LOG_DRAWS=n` (TEV, indirect and blend state of every draw in frame
   n), `FORECAST_QUIT_FRAME=n` (quit after frame n), `FORECAST_GPU_TIME=1`
-  (wait for each frame's GPU work and log its time every 120 frames); the log
+  (wait for each frame's GPU work and log its time every 120 frames),
+  `FORECAST_FINGERS=frame:frames:x1:y1:x2:y2:x1':y1':x2':y2'[;...]` (two scripted
+  fingers, window-relative), `FORECAST_WINDOW=WxH` (e.g. 1704x786 for the iPhone's
+  shape; hidden runs default to 1280x720), `FORECAST_FILL=0` (black bars instead
+  of the screen fill), `FORECAST_FILL_2D=0` (keep 2D draws in the frame),
+  `FORECAST_LOG_FILL=1`; with the fill active a dump also writes `screen_<n>.bmp`
+  (what the window shows; `efb_<n>.bmp` stays the game's frame); the log
   prints fps and busy % every 600 frames. Shaders:
   `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`.
   Specialized TEV shaders (`PLAN.md` "Status"): a pixel shader per TEV
@@ -119,20 +125,21 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 ## Open work, in priority order
 
 1. **iOS: works on the user's iPhone 15 Pro (iOS 26.3.1), 2026-11-16.** Their feedback:
-   - A bit laggy. Get `boot.log` from the app's Files folder: it prints fps and busy % every
-     600 frames. Suspects: the 3x EFB (1920x1368), the TEV ubershader's per-pixel loops on a
-     tile GPU, CPU vertex transform, the per-frame texture re-hash.
-     Specialized TEV shaders now replace the ubershader (not yet run on the phone: check
-     `boot.log` for "tev shader N" lines, "failed" and the "draws specialized" summary). A
-     shader that fails to compile falls back to the ubershader by itself. If the Metal path
-     misbehaves otherwise: `gx_spec_init` picks the defaults (`FORECAST_SPECIALIZED=main`
-     creates the SDL shaders on the main thread, `=0` turns specialization off; a sideloaded
-     app has no environment to set, so change the default and rebuild). The CPU vertex
-     transform is also ~2x faster (PLAN.md "CPU vertex transform"), and the EFB is 2x on the
-     phone. Their last log of the 3x / ubershader build: 43-48 fps for the first ~15 s on the
-     globe, then a steady 60 (GPU ~11 ms of wait a frame).
-   - Does not fill the screen: the 16:9 frame is letterboxed on the 19.5:9 display (milestone 7).
-   - No pinch to zoom the globe (milestone 7; the Remote's -/+ have no touch equivalent yet).
+   - Lag: fixed. With specialized TEV shaders (MSL, every draw specialized from the first frame
+     thanks to `tev_shaders.bin`), the ~2x faster vertex transform and the 2x EFB, the phone
+     holds a steady 60 fps on the globe (`boot.log` 2026-11-17; before: 43-48 fps for the first
+     ~15 s). If the Metal path ever misbehaves: `gx_spec_init` picks the defaults
+     (`FORECAST_SPECIALIZED=main` / `=0`; a sideloaded app has no environment, so change the
+     default and rebuild).
+   - FORE000006 ("Unable to download the latest information") on some launches: WiiLink's
+     `short.bin` carries an expiry time (`ShortHeader::mTime`, UTC minutes since 2000) and the
+     server sometimes keeps serving it minutes past that; the channel rejects it ("short check
+     -2" in `boot.log`), as a Wii would. It clears when WiiLink regenerates the file. A port-side
+     grace period was offered; the user didn't take it up.
+   - Milestone 7 (2026-11-17, not yet on the phone): touch gestures (`port/sdk/kpad.c`: tap
+     shows the globe's bars, pinch zooms, two-finger swipe = Up/Down) and the screen fill
+     (`PLAN.md` "Milestone 7"). The user asked that nothing important sit under the Dynamic
+     Island: UI stays in the 16:9 frame, only scenery goes into the side strips.
    - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from
      scratch), so the six channel files must be copied in again. Options: an in-app file picker
      (UIDocumentPicker) that imports from anywhere in Files, or keeping a copy outside the app.
@@ -159,5 +166,5 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 4. **Texture compression: check ASTC on an iPhone** (milestone 6). The GPU-side
    ASTC path cannot run on this PC (no ASTC on desktop GPUs); its blocks were
    verified against an independent decoder (`tools/texcodec_test`). BC1 runs here.
-5. **Touch design** (milestone 7, with the iPhone layout): replacements for
-   hover highlights, B (back), +/- (globe zoom: pinch), 1/2; bigger hit areas.
+5. **Touch design, rest** (milestone 7): B (back) and 1/2 have no gesture yet; bigger hit
+   areas; a pressed state where the Wii relied on hover highlights; text size at phone scale.

@@ -328,6 +328,29 @@ Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.
 
+### Milestone 7: started (2026-11-17): touch gestures and the screen fill
+- **Touch** (`port/sdk/kpad.c`, see its header): the globe's bars slide in only while the Wii
+  pointer is on screen and moving or at the top / bottom edge, which a finger can't do, so after
+  a tap the pointer is parked just off the top-left corner (x -8 px: counts as on screen and at
+  the top edge, hovers nothing) for 5 s; a tap in the middle hides the bars, a tap on them keeps
+  them. Pinch / spread = - / + (one zoom step per 1.18x of finger distance), two-finger swipe =
+  Up / Down (globe tilt; the page above / below on the forecast pages), mouse wheel = zoom.
+  While two fingers are down the pointer is off screen and A released. `System.cpp`
+  (FORECAST_PORT): no cursor smoothing; easing toward a new touch made taps spin the globe.
+- **Screen fill** (`port_display_layout` in `platform.c`, `gx_sdl.cpp`,
+  `shaders/gx_present_ps.hlsl`): the 16:9 frame stays where it was (inside
+  `SDL_GetWindowSafeArea`'s width; vertical insets ignored); the strips beside it (up to 21:9
+  in all) get scenery. The EFB is widened by M = ceil(strip / frame width x 640) on each side
+  (71 on an iPhone 15 Pro: 1564x912 at 2x); draws whose viewport spans the EFB get clip-space x
+  scaled by 640/(640+2M) and a full-width viewport, scissors covering the frame widen, the rest
+  are offset by M; untextured full-frame 2D draws (fades) stretch across. A frame shows the 3D
+  margins if a widened perspective draw is not hidden by a later textured full-frame 2D draw;
+  otherwise its edge columns are stretched outward (shaded to 0.8 at the screen edge);
+  switches cross-fade over 8 frames. EFB copies and `efb_<n>.bmp` stay in game coordinates.
+  16:9 windows: dumps byte-identical to before. iOS: home indicator dimmed
+  (`SDL_HINT_IOS_HIDE_HOME_INDICATOR` 2). Costs ~22% more EFB pixels on the phone.
+- `port_display_rect` gives kpad the frame in window coordinates (points on iOS).
+
 ### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
 - (ef relocation items: moot, the cursor effect is dropped.)
