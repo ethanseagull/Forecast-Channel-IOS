@@ -25,10 +25,10 @@ index e32f7fc..db0fb3d 100644
  
  // Textured dots on the globe, one triangle per location. They fade out while the globe is moving.
 diff --git a/include/channel/LayoutButton.h b/include/channel/LayoutButton.h
-index ff8e8d9..3fe00f4 100644
+index ff8e8d9..1f11950 100644
 --- a/include/channel/LayoutButton.h
 +++ b/include/channel/LayoutButton.h
-@@ -163,6 +163,12 @@ public:
+@@ -163,6 +163,16 @@ public:
      void SetPaneAlpha(s32 alpha);
      void SetViewMtx(const nw4r::math::MTX34& mtx);
      void SetSlideOffset(f32 offset);
@@ -37,6 +37,10 @@ index ff8e8d9..3fe00f4 100644
 +    // (port/channel/portrait.cpp) and remakes the buttons, which measured
 +    // them. Call right after construction, before FindButton.
 +    void ApplyPortrait(const char* key);
++    // Turning the phone: what each button of the given group (the same
++    // layout, laid out for the old shape) shows and how, and the group's
++    // slide and fade, carried over to this one.
++    void PortraitCopyState(const ButtonGroup* from);
 +#endif
  
      inline void UpdateAll();
@@ -99,7 +103,7 @@ index 8a22f8c..b0e1a77 100644
      void Reset();
      void Draw();
 diff --git a/include/channel/WeatherViews.h b/include/channel/WeatherViews.h
-index 9696acd..d903ea5 100644
+index 9696acd..9234dfa 100644
 --- a/include/channel/WeatherViews.h
 +++ b/include/channel/WeatherViews.h
 @@ -32,6 +32,10 @@ public:
@@ -137,6 +141,31 @@ index 9696acd..d903ea5 100644
  
      void Reset();
      void Draw();
+@@ -230,6 +244,11 @@ public:
+     };
+ 
+     WeatherAround(void* arc);
++#ifdef FORECAST_PORT
++    // Turning the phone: the layouts (and what was measured from them) made
++    // again for the new shape; everything else stays as it is.
++    void PortraitRelayout(void* arc);
++#endif
+     virtual ~WeatherAround();
+ 
+     void Reset();
+@@ -400,6 +419,12 @@ public:
+ 
+     WeatherNormal(void* arc);
+     ~WeatherNormal();
++#ifdef FORECAST_PORT
++    // Turning the phone: the layouts, pages and what was measured from them
++    // made again for the new shape; the page shown, the belt and the rest
++    // stay as they are.
++    void PortraitRelayout(void* arc);
++#endif
+ 
+     void SetupBoxesJP();
+     void SetupBoxes();
 diff --git a/include/macros.h b/include/macros.h
 index 23a63c4..cdb8a36 100644
 --- a/include/macros.h
@@ -1522,7 +1551,7 @@ index 8714c93..aaaee72 100644
  
  void TPLBind(TPLPalette* pal);
 diff --git a/src/ButtonGroup.cpp b/src/ButtonGroup.cpp
-index 1f90e46..fae65d5 100644
+index 1f90e46..79fcd6c 100644
 --- a/src/ButtonGroup.cpp
 +++ b/src/ButtonGroup.cpp
 @@ -11,6 +11,10 @@
@@ -1536,7 +1565,7 @@ index 1f90e46..fae65d5 100644
  inline void ButtonGroup::ResetButtons() {
      for (int i = 0; i < mNumButtons; i++) {
          mButtons[i]->Reset();
-@@ -58,6 +62,28 @@ ButtonGroup::ButtonGroup(void* arc, const char* layoutName, ButtonColors* colors
+@@ -58,6 +62,61 @@ ButtonGroup::ButtonGroup(void* arc, const char* layoutName, ButtonColors* colors
      mSlideFrame = 0;
  }
  
@@ -1559,6 +1588,39 @@ index 1f90e46..fae65d5 100644
 +        mButtons[mNumButtons++] = new LayoutButton(&*it, mDrawInfo, colors, mTagProcessor);
 +    }
 +    ResetButtons();
++}
++#endif
++
++#ifdef FORECAST_PORT
++void ButtonGroup::PortraitCopyState(const ButtonGroup* from) {
++    for (int i = 0; i < mNumButtons && i < from->mNumButtons; i++) {
++        LayoutButton* b = mButtons[i];
++        const LayoutButton* a = from->mButtons[i];
++        if (a->mHidden && !b->mHidden) {
++            b->Hide();
++        }
++        b->mHidden = a->mHidden;
++        if (a->mState != b->mState) {
++            b->SetState(a->mState);
++        }
++        b->mNextState = a->mNextState;
++        b->mLocked = a->mLocked;
++        b->mDisabled = a->mDisabled;
++        b->mToggle = a->mToggle;
++        b->mSelected = a->mSelected;
++        b->mAlpha = a->mAlpha;
++        b->mBrightness = a->mBrightness;
++        b->mHoverFrame = a->mHoverFrame;
++        b->mHighlightFrame = a->mHighlightFrame;
++        b->mHighlightFrames = a->mHighlightFrames;
++    }
++    mSlidingOut = from->mSlidingOut;
++    mSlideFrames = from->mSlideFrames;
++    mSlideFrame = from->mSlideFrame;
++    mFadingOut = from->mFadingOut;
++    mFadeFrames = from->mFadeFrames;
++    mFadeFrame = from->mFadeFrame;
++    mAlpha = from->mAlpha;
 +}
 +#endif
 +
@@ -2477,10 +2539,65 @@ index 1ce7d42..0d26117 100644
              mSelected = mEntries;
          }
 diff --git a/src/WeatherAround.cpp b/src/WeatherAround.cpp
-index df8263c..16ee26e 100644
+index df8263c..1b081ad 100644
 --- a/src/WeatherAround.cpp
 +++ b/src/WeatherAround.cpp
-@@ -166,6 +166,9 @@ WeatherAround::WeatherAround(void* arc)
+@@ -147,6 +147,54 @@ static inline void SetBoxPos(TextBox* box, f32 centerX, f32 scaleX, f32 centerY)
+     box->mY = centerY - box->mY;
+ }
+ 
++#ifdef FORECAST_PORT
++void WeatherAround::PortraitRelayout(void* arc) {
++    ButtonGroup* oldLayout = mLayout;
++    ButtonGroup* oldBelt = mBeltLayout;
++    // As the constructor does it.
++    mLayout = new ButtonGroup(arc, "around.brlyt", gButtonColors, false);
++    mLayout->ApplyPortrait("around");
++    mNextButton = mLayout->FindButton("next");
++    mZoomInButton = mLayout->FindButton("zoom_in");
++    mZoomOutButton = mLayout->FindButton("zoom_out");
++    mZoomOutButton->mColorCallback = ZoomOutColorCallback;
++    mZoomOutI0 = mZoomOutButton->FindPane("zoom_outI0");
++    mZoomOutI1 = mZoomOutButton->FindPane("zoom_outI1");
++    mZoomOutButton->SetCalcCallback(ZoomOutCalcCallback, this);
++    mRotAButton = mLayout->FindButton("rot_a");
++    mRotBButton = mLayout->FindButton("rot_b");
++    mResetButton = mLayout->FindButton("reset");
++    mBeltLayout = new ButtonGroup(arc, "around_belt.brlyt", gButtonColors, false);
++    mBeltLayout->ApplyPortrait("around_belt");
++    mBelt = mBeltLayout->FindButton("belt");
++    mBelt->ShowLanguagePane("beltB");
++    mKion = mBeltLayout->FindButton("kion");
++    mRain = mBeltLayout->FindButton("rain");
++    mHigh = mBeltLayout->FindButton("high");
++    f32 centerY = 228.0f;
++    if (gLanguage == 0) {
++        f32 centerX = 0.5f * GetScreenWidth();
++        f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
++        TextBox* box = mTitles;
++        for (s32 i = 0; i < 3; i++, box++) {
++            box->mPane = mBeltLayout->FindButton(sTitleNames[i]);
++            if (box->mPane != NULL) {
++                SetBoxPos(box, centerX, scaleX, centerY);
++            }
++        }
++    }
++    Vec2F center = mBelt->GetCenter();
++    f32 beltH = __fabsf(mBelt->mRect.top - mBelt->mRect.bottom);
++    center.y = (centerY - center.y) - 0.5f * beltH;
++    mSlideMax = center.y - (gWidescreen ? 19 : 34);
++    // What they showed carries over.
++    mLayout->PortraitCopyState(oldLayout);
++    mBeltLayout->PortraitCopyState(oldBelt);
++    delete oldLayout;
++    delete oldBelt;
++}
++#endif
++
+ WeatherAround::WeatherAround(void* arc)
+     : mBackList(NULL), mFrontList(NULL), mOverlapList(NULL), mLayout(NULL), mBeltLayout(NULL), mResetButton(NULL),
+       mBelt(NULL), mKion(NULL), mRain(NULL), mHigh(NULL), mNextButton(NULL), mZoomInButton(NULL),
+@@ -166,6 +214,9 @@ WeatherAround::WeatherAround(void* arc)
      }
  
      mLayout = new ButtonGroup(arc, "around.brlyt", gButtonColors, false);
@@ -2490,7 +2607,7 @@ index df8263c..16ee26e 100644
      mNextButton = mLayout->FindButton("next");
      mZoomInButton = mLayout->FindButton("zoom_in");
      mZoomOutButton = mLayout->FindButton("zoom_out");
-@@ -181,6 +184,9 @@ WeatherAround::WeatherAround(void* arc)
+@@ -181,6 +232,9 @@ WeatherAround::WeatherAround(void* arc)
      mResetButton = mLayout->FindButton("reset");
  
      mBeltLayout = new ButtonGroup(arc, "around_belt.brlyt", gButtonColors, false);
@@ -2500,7 +2617,7 @@ index df8263c..16ee26e 100644
      mBelt = mBeltLayout->FindButton("belt");
      mBelt->ShowLanguagePane("beltB");
      mKion = mBeltLayout->FindButton("kion");
-@@ -341,6 +347,9 @@ void WeatherAround::UpdateButtonFade() {
+@@ -341,6 +395,9 @@ void WeatherAround::UpdateButtonFade() {
      f32 right = 16.0f + GetScreenWidth();
      f32 top = 63.0f;
      f32 bottom = 393.0f;
@@ -2510,7 +2627,7 @@ index df8263c..16ee26e 100644
      minDist = 900.0f;
      s32 i;
      BOOL moved = FALSE;
-@@ -385,6 +394,13 @@ void WeatherAround::UpdateButtonFade() {
+@@ -385,6 +442,13 @@ void WeatherAround::UpdateButtonFade() {
          mIdleTimer++;
      }
  
@@ -2524,7 +2641,7 @@ index df8263c..16ee26e 100644
      if (mPointerIdle < 10 && mIdleTimer < 90) {
          mLayout->SlideIn(15);
      } else {
-@@ -400,6 +416,11 @@ void WeatherAround::UpdateButtonFade() {
+@@ -400,6 +464,11 @@ void WeatherAround::UpdateButtonFade() {
      }
  
      s32 minAlpha = 32;
@@ -2536,7 +2653,7 @@ index df8263c..16ee26e 100644
      s32 alpha = minAlpha;
      alpha += (s32)(255.0f - minAlpha) * nw4r::math::SinRad((1.5708f * (15 - mHoverTimer)) / 15.0f);
      mLayout->SetButtonParams(alpha, mHoverTimer, 15);
-@@ -554,6 +575,9 @@ void WeatherAround::CalcActive() {
+@@ -554,6 +623,9 @@ void WeatherAround::CalcActive() {
      f32 x;
      f32 top = 63.0f;
      f32 bottom = 393.0f;
@@ -2546,7 +2663,7 @@ index df8263c..16ee26e 100644
      for (s32 i = 0; i < 4; i++) {
          y = gCursorY[i];
          x = gCursorX[i];
-@@ -914,6 +938,9 @@ static inline void AddBackBucket(CityLabel** buckets, CityLabel* l) {
+@@ -914,6 +986,9 @@ static inline void AddBackBucket(CityLabel** buckets, CityLabel* l) {
  void WeatherAround::UpdateLabels() {
      f32 top = 63.0f;
      f32 bottom = 393.0f;
@@ -2556,7 +2673,7 @@ index df8263c..16ee26e 100644
  
      ClearLists();
  
-@@ -1163,6 +1190,9 @@ BOOL WeatherAround::StateGlobe() {
+@@ -1163,6 +1238,9 @@ BOOL WeatherAround::StateGlobe() {
  void WeatherAround::UpdateDrag() {
      f32 top = 63.0f;
      f32 bottom = 393.0f;
@@ -2566,7 +2683,7 @@ index df8263c..16ee26e 100644
      f32 startRot = gSimpleGlobe->mView != NULL ? gSimpleGlobe->mView->getOrientation()->z : 0.0f;
      BOOL dragging = FALSE;
  
-@@ -1627,10 +1657,15 @@ Vector2 WeatherAround::GetTempSizeLarge(CityLabel* label) {
+@@ -1627,10 +1705,15 @@ Vector2 WeatherAround::GetTempSizeLarge(CityLabel* label) {
  }
  
  inline void SetTextBoxColors(nw4r::lyt::TextBox* textBox, nw4r::ut::Color top, nw4r::ut::Color bottom) {
@@ -2667,7 +2784,7 @@ index 8b07786..ed4b794 100644
      mIconBox->mWidth = sIconWidth;
      mIconBox->mHeight = sIconHeight;
 diff --git a/src/WeatherNormal.cpp b/src/WeatherNormal.cpp
-index 3105912..ec74cf1 100644
+index 3105912..fbe99e9 100644
 --- a/src/WeatherNormal.cpp
 +++ b/src/WeatherNormal.cpp
 @@ -161,16 +161,27 @@ WeatherNormal::WeatherNormal(void* arc)
@@ -2745,7 +2862,87 @@ index 3105912..ec74cf1 100644
      unk7FC = TRUE;
      mSoundEnabled = TRUE;
      UpdateBeltHover();
-@@ -1092,7 +1136,12 @@ void WeatherNormal::Draw() {
+@@ -687,6 +731,79 @@ void WeatherNormal::SetCity() {
+     }
+ }
+ 
++#ifdef FORECAST_PORT
++void WeatherNormal::PortraitRelayout(void* arc) {
++    // A new view laid out for the new shape hands over its layouts, pages
++    // and measurements; it leaves with this one's old ones.
++    s32 page = gForecastPage;
++    f32 oldStep = mPages[1]->mSize.y;
++    WeatherNormal* fresh = new WeatherNormal(arc);
++    gForecastPage = page; // its constructor starts at Current
++    fresh->mLayout->PortraitCopyState(mLayout);
++    fresh->mBaseLayout->PortraitCopyState(mBaseLayout);
++    fresh->mBeltLayout->PortraitCopyState(mBeltLayout);
++    fresh->mTimeLayout->PortraitCopyState(mTimeLayout);
++#define SWAP_FIELD(f)                                                                                        \
++    {                                                                                                        \
++        __typeof__(f) t = f;                                                                                 \
++        f = fresh->f;                                                                                        \
++        fresh->f = t;                                                                                        \
++    }
++    SWAP_FIELD(mLayout);
++    SWAP_FIELD(mBaseLayout);
++    SWAP_FIELD(mBeltLayout);
++    SWAP_FIELD(mTimeLayout);
++    SWAP_FIELD(mAroundButton);
++    SWAP_FIELD(mSetButton);
++    SWAP_FIELD(mBackButton);
++    SWAP_FIELD(mUpButton);
++    SWAP_FIELD(mDownButton);
++    for (s32 i = 0; i < 5; i++) {
++        SWAP_FIELD(mPages[i]);
++    }
++#undef SWAP_FIELD
++    for (s32 i = 0; i < 8; i++) {
++        mBoxes[i] = fresh->mBoxes[i];
++    }
++    for (s32 i = 0; i < 2; i++) {
++        mBelt[i].mRect = fresh->mBelt[i].mRect;
++        mBelt[i].mMaxWidth = fresh->mBelt[i].mMaxWidth;
++        mBelt[i].mMaxHeight = fresh->mBelt[i].mMaxHeight;
++        mBelt[i].mX = fresh->mBelt[i].mX;
++        mBelt[i].mY = fresh->mBelt[i].mY;
++    }
++    mCityRect = fresh->mCityRect;
++    mDateX = fresh->mDateX;
++    mDateY = fresh->mDateY;
++    mDateWidth = fresh->mDateWidth;
++    mDateHeight = fresh->mDateHeight;
++    mWideOffset = fresh->mWideOffset;
++    delete fresh;
++
++    // The pages a screen apart in the new shape, the same one in view.
++    f32 newStep = mPages[1]->mSize.y;
++    if (oldStep != 0.0f) {
++        mPageY = mPageY / oldStep * newStep;
++    }
++    LayoutPages();
++    for (s32 i = 0; i < gForecastPageCount; i++) {
++        mPages[i]->Reset();
++    }
++    // The city's name, the date and the belt fitted to their new widths.
++    gTextWriter.SetFont(*gSysFont);
++    f32 maxWidth = mCityRect.right - mCityRect.left;
++    for (s32 i = 0; i < mNumNames && i < 3; i++) {
++        FIT_NAME(mNames[i]);
++    }
++    if (mSetupDate) {
++        (this->*mSetupDate)();
++    }
++    if (mUpdateBeltText) {
++        (this->*mUpdateBeltText)();
++    }
++}
++#endif
++
+ #define FIT_DATE(scaleX, scaleY)                                                                             \
+     mDateScaleX = scaleX;                                                                                    \
+     mDateScaleY = scaleY;                                                                                    \
+@@ -1092,7 +1209,12 @@ void WeatherNormal::Draw() {
      CityNameLine* line = mNames;
      f32 lineHeight = mBelt[1].mRect.GetHeight();
      f32 y = mNameScroll + (mCityRect.top + 0.5f * mCityRect.GetHeight());
@@ -2758,7 +2955,7 @@ index 3105912..ec74cf1 100644
      switch (mDateType) {
      case 0:
          for (i = 0; i < mNumNames; i++, line++) {
-@@ -1670,6 +1719,9 @@ BOOL WeatherNormal::ChangeState(StateFunc state, s32 arg) {
+@@ -1670,6 +1792,9 @@ BOOL WeatherNormal::ChangeState(StateFunc state, s32 arg) {
  inline void WeatherNormal::LayoutPages() {
      f32 y = mPageY;
      f32 step = 456.0f;
@@ -2768,7 +2965,7 @@ index 3105912..ec74cf1 100644
      s32 i;
      for (i = 0; i < gForecastPageCount; i++) {
          mPageVisible[i] = TRUE;
-@@ -1816,6 +1868,9 @@ BOOL WeatherNormal::StateNormal(s32 arg) {
+@@ -1816,6 +1941,9 @@ BOOL WeatherNormal::StateNormal(s32 arg) {
                  mZoomRect.left = mZoomX;
                  mMoveX2 = width - mZoomX;
                  mMoveY2 = 456.0f - mZoomY;
@@ -2778,7 +2975,7 @@ index 3105912..ec74cf1 100644
                  mZoomRect.bottom = mZoomY;
                  mZoomRect.top = mZoomY;
                  PlaySE(42);
-@@ -1865,6 +1920,15 @@ BOOL WeatherNormal::StateNormal(s32 arg) {
+@@ -1865,6 +1993,15 @@ BOOL WeatherNormal::StateNormal(s32 arg) {
                  mZoomRect.top = 0.0f;
                  mZoomRect.right = GetScreenWidth();
                  mZoomRect.bottom = 456.0f;
@@ -2794,7 +2991,7 @@ index 3105912..ec74cf1 100644
                  PlaySE(43);
              }
              break;
-@@ -2094,6 +2158,9 @@ BOOL WeatherNormal::StateToAround(s32 arg) {
+@@ -2094,6 +2231,9 @@ BOOL WeatherNormal::StateToAround(s32 arg) {
          if (gSimpleGlobe != NULL) {
              mPhase++;
              pageY = -456.0f;
@@ -2829,7 +3026,7 @@ index 4d956e5..0078ec9 100644
      mIconPane = mLayout->FindButton("life_b");
      if (mIconPane == NULL) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..0171d59 100644
+index 661a8c4..957f224 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
 @@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
@@ -2866,7 +3063,7 @@ index 661a8c4..0171d59 100644
      if (!gFatalRequested) {
          if (mDrawFunc) {
              (this->*mDrawFunc)();
-@@ -310,7 +326,81 @@ void WeatherScene::unk2C() {
+@@ -310,7 +326,56 @@ void WeatherScene::unk2C() {
      gRainSound.Update();
  }
  
@@ -2881,20 +3078,20 @@ index 661a8c4..0171d59 100644
 +        return;
 +    }
 +    BOOL views = mNormal != NULL && mAround != NULL && mSetting != NULL;
-+    // Settings, setup (date, region, city), an error window, or "One moment,
-+    // please..." before the views exist: their layouts are made again in
-+    // place; the views not showing are simply made again.
-+    BOOL setting = views && mDrawFunc == &WeatherScene::DrawSetting;
-+    BOOL other = mDrawFunc == &WeatherScene::DrawAddress || mDrawFunc == &WeatherScene::DrawError ||
-+                 (mDrawFunc == &WeatherScene::DrawConnect && !views);
-+    // The forecast pages or the globe, sitting idle: made again and put
-+    // back where they were.
++    // When the screen sits still: Settings, setup (date, region, city), an
++    // error window, "One moment, please..." before the views exist, or the
++    // forecast pages or the globe at rest (not scrolling, zooming or
++    // opening). Every view's layouts are then made again in place for the
++    // new shape; what each shows (page, globe mode, belt, settings, list
++    // position) stays as it was.
++    BOOL still = mDrawFunc == &WeatherScene::DrawSetting || mDrawFunc == &WeatherScene::DrawAddress ||
++                 mDrawFunc == &WeatherScene::DrawError || (mDrawFunc == &WeatherScene::DrawConnect && !views);
 +    BOOL pages = views && mState == &WeatherScene::StateNormal && mStatePhase == 1 && gSettingResult != 3 &&
 +                 gSettingResult != 4 && gSettingResult != 5 && mNormal->mActive &&
 +                 mNormal->mState == &WeatherNormal::StateNormal && mNormal->mPhase == 1 && !mNormal->mZoomed;
 +    BOOL globe = views && mState == &WeatherScene::StateAround && mStatePhase == 1 && gSettingResult != 2 &&
 +                 gSettingResult != 6 && mAround->mActive;
-+    if (!setting && !other && !pages && !globe) {
++    if (!still && !pages && !globe) {
 +        return;
 +    }
 +    port_layout_commit();
@@ -2908,36 +3105,11 @@ index 661a8c4..0171d59 100644
 +        mErrorWindow->RebuildLayouts(mLayoutArc);
 +    }
 +    if (views) {
-+        s32 page = gForecastPage;
-+        delete mNormal;
-+        delete mAround;
-+        mNormal = new WeatherNormal(mLayoutArc);
-+        mAround = new WeatherAround(mLayoutArc);
-+        gForecastPage = page; // the pages' constructor starts at Current
-+        mNormal->Reset();
-+        mAround->Reset();
-+        if (setting) {
-+            mSetting->PortraitRelayout(mLayoutArc);
-+        } else {
-+            delete mSetting;
-+            mSetting = new WeatherSetting(mLayoutArc);
-+            mSetting->Reset();
-+        }
++        mNormal->PortraitRelayout(mLayoutArc);
++        mAround->PortraitRelayout(mLayoutArc);
++        mSetting->PortraitRelayout(mLayoutArc);
 +    }
 +    ClearHoveredButtons();
-+    if (pages) {
-+        mNormal->SetCity();
-+        mAround->unk250 = TRUE;
-+        mNormal->Open();
-+    } else if (globe) {
-+        mNormal->SetCity();
-+        mNormal->OpenAround();
-+        mNormal->mActive = FALSE;
-+        mAround->mActive = TRUE;
-+        mAround->Show();
-+        mAround->unk250 = FALSE;
-+        mAround->Open();
-+    }
 +}
 +#endif
 +
@@ -2948,7 +3120,7 @@ index 661a8c4..0171d59 100644
      if (gHoldAll) {
          sHoldTimer = 300;
      } else if (sHoldTimer != 0) {
-@@ -523,14 +613,22 @@ void WeatherScene::DrawNormal() {
+@@ -523,14 +588,22 @@ void WeatherScene::DrawNormal() {
      }
  
      nw4r::math::VEC3 pos(sTitlePos.x, sTitlePos.y + gTitleOffsetY, sTitlePos.z);
