@@ -34,7 +34,7 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
   the private repo https://github.com/ethanseagull/ForecastOS (remote `origin`).
   History was rewritten once (2026-11-16) to drop the Wii common key; the key
   is in no commit or object. The iOS workflow (`.github/workflows/ios.yml`)
-  runs on every push and uploads `ForecastOS-ipa` (unsigned). Private repo:
+  runs on every push and uploads `ForecastChannel-ipa` (unsigned, `ForecastChannel.ipa`). Private repo:
   macOS minutes count 10x against the free plan's 2,000 a month.
 - **Milestones 2-4 done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
   downloads the forecast from WiiLink, runs the first-run setup (date check,

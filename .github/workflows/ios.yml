@@ -100,11 +100,11 @@ jobs:
           test -n "$app"
           mkdir -p Payload
           cp -R "$app" Payload/
-          zip -qry ForecastOS.ipa Payload
-          ls -l ForecastOS.ipa
+          zip -qry ForecastChannel.ipa Payload
+          ls -l ForecastChannel.ipa
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ForecastOS-ipa
-          path: ForecastOS.ipa
+          name: ForecastChannel-ipa
+          path: ForecastChannel.ipa
           retention-days: 30

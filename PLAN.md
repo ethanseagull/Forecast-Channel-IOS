@@ -271,7 +271,7 @@ GPU texture memory on the globe: 123 MB -> 22 MB (BC1), 497 MB -> 98 MB with the
 - `nus_fetch.ps1` reads the Wii common key from `WII_COMMON_KEY` or `common-key.txt` (ignored).
 - iOS target: CMake app bundle (`port/ios/Info.plist.in`), SDL3 built from source, Metal
   shaders generated from the HLSL by `tools/build_shaders_msl.sh` (glslang + SPIRV-Cross),
-  GitHub Actions workflow `.github/workflows/ios.yml` -> unsigned `ForecastOS.ipa`.
+  GitHub Actions workflow `.github/workflows/ios.yml` -> unsigned `ForecastChannel.ipa`.
 
 ### Specialized TEV shaders (2026-11-16)
 The iPhone was GPU-bound on the ubershader, so each TEV configuration a draw uses now gets its
