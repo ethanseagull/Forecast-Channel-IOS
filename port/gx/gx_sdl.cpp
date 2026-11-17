@@ -985,24 +985,12 @@ static Uint32 sSwapW, sSwapH; // the window's image, last acquired
 //
 // Without the screen fill the EFB is blitted into the frame (as always).
 // With it, gx_present_ps.hlsl draws textured quads (vertex colour times the
-// EFB): the frame, and in each strip beside it the frame's edge continued
-// (edge_params) and / or the EFB's margin with
+// EFB): the frame, and in each strip beside it the frame's edge column
+// stretched (darker toward the screen edge) and / or the EFB's margin with
 // the 3D scene, the latter blended in by sWideness.
 
-// The edge extension continues each row's colour trend at the frame's edge
-// (gx_present_ps.hlsl): a gradient keeps going, easing off, and flat bands
-// stay flat. Its quads carry tex2 = (1, distance from the frame in game
-// pixels, inward u step per game pixel) and tex3.x = v per game pixel.
-static void edge_params(GXVtxOut* q, f32 seamX, f32 farDist, f32 duIn, f32 dv, f32 tw) {
-    f32 seamClip = seamX / tw * 2.0f - 1.0f;
-    for (int i = 0; i < 6; i++) {
-        bool atSeam = SDL_fabsf(q[i].pos[0] - seamClip) < 1e-4f;
-        q[i].tex[2][0] = 1.0f;
-        q[i].tex[2][1] = atSeam ? 0.0f : farDist;
-        q[i].tex[2][2] = duIn;
-        q[i].tex[3][0] = dv;
-    }
-}
+// The edge extension's colour at the screen edge (1 at the frame).
+#define FILL_EDGE_SHADE 0.8f
 
 static SDL_GPUShader* sPresentPS;
 static SDL_GPUSampler* sPresentSmp;
@@ -1127,16 +1115,14 @@ static void compose(SDL_GPUCommandBuffer* cb, SDL_GPUTexture* target, Uint32 tw,
     n += 6;
     f32 wide = sWideness;
     if (wide < 1.0f) {
-        // Game pixels across a strip; u and v per game pixel.
-        f32 gpx = (f32)sEfbW / d.w, du = 1.0f / W, dv = 1.0f / (f32)sEfbH;
         if (d.fillLeft > 0.0f) {
-            present_quad(&v[n], fw, fh, lx, y0, x0, y1, uEdge0, 0.0f, uEdge0, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f);
-            edge_params(&v[n], x0, d.fillLeft * gpx, du, dv, fw);
+            present_quad(&v[n], fw, fh, lx, y0, x0, y1, uEdge0, 0.0f, uEdge0, 1.0f, 0.0f, 1.0f, FILL_EDGE_SHADE, 1.0f,
+                         1.0f);
             n += 6;
         }
         if (d.fillRight > 0.0f) {
-            present_quad(&v[n], fw, fh, x1, y0, rx, y1, uEdge1, 0.0f, uEdge1, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f);
-            edge_params(&v[n], x1, d.fillRight * gpx, -du, dv, fw);
+            present_quad(&v[n], fw, fh, x1, y0, rx, y1, uEdge1, 0.0f, uEdge1, 1.0f, 0.0f, 1.0f, 1.0f, FILL_EDGE_SHADE,
+                         1.0f);
             n += 6;
         }
     }

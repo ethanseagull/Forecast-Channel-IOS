@@ -345,11 +345,8 @@ Off on the port (each marked in the source):
   scaled by 640/(640+2M) and a full-width viewport, scissors covering the frame widen, the rest
   are offset by M; untextured full-frame 2D draws (fades) stretch across. A frame shows the 3D
   margins if a widened perspective draw is not hidden by a later textured full-frame 2D draw;
-  otherwise its edge continues outward (`gx_present_ps.hlsl`): each row's colour trend between
-  the frame's edge and ~17 px in, eased off over ~55 px, so gradients keep going and flat bands
-  stay flat; in the grey button bars (y < 63, y > 393) a divider like the channel's is drawn at
-  the frame's edge, so the outer buttons keep their width (labels centred: the user's
-  feedback) and the strips read as blank buttons. Switches cross-fade over 8 frames. EFB copies and `efb_<n>.bmp` stay in game coordinates.
+  otherwise its edge columns are stretched outward (shaded to 0.8 at the screen edge);
+  switches cross-fade over 8 frames. EFB copies and `efb_<n>.bmp` stay in game coordinates.
   16:9 windows: dumps byte-identical to before. iOS: home indicator dimmed
   (`SDL_HINT_IOS_HIDE_HOME_INDICATOR` 2). Costs ~22% more EFB pixels on the phone.
 - `port_display_rect` gives kpad the frame in window coordinates (points on iOS).
