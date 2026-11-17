@@ -30,8 +30,12 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main**: milestones 1-4; `git log` for the
-  tip. No remote, nothing pushed.
+- **main**: milestones 1-5, texture compression, iOS preparation; pushed to
+  the private repo https://github.com/ethanseagull/ForecastOS (remote `origin`).
+  History was rewritten once (2026-11-16) to drop the Wii common key; the key
+  is in no commit or object. The iOS workflow (`.github/workflows/ios.yml`)
+  runs on every push and uploads `ForecastOS-ipa` (unsigned). Private repo:
+  macOS minutes count 10x against the free plan's 2,000 a month.
 - **Milestones 2-4 done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
   downloads the forecast from WiiLink, runs the first-run setup (date check,
   region, city), shows real weather on the 2D screens and draws the globe
@@ -102,9 +106,10 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 
 ## Open work, in priority order
 
-1. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
-   free macOS runner needs a public repo), make it read the key from a local
-   file or prompt for it, and drop it from history (it is in `33cf20c`).
+1. **iOS build in CI** (milestone 6): make the workflow green, then sideload
+   the .ipa and test on the iPhone: import (copy 00000001.app and
+   00000006-0000000a.app into the app's folder in Files), ASTC textures, audio,
+   touch, memory. Decide what "Back to the Wii Menu" does on iOS (quits now).
 2. **Milestone 4 loose ends.** Compare with Dolphin (same WiiLink-patched
    channel): the globe's water and relief shading (indirect texturing and
    environment texgens, judged by eye only), and the left part of the forecast
@@ -126,10 +131,5 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 4. **Texture compression: check ASTC on an iPhone** (milestone 6). The GPU-side
    ASTC path cannot run on this PC (no ASTC on desktop GPUs); its blocks were
    verified against an independent decoder (`tools/texcodec_test`). BC1 runs here.
-5. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
-   runner, unsigned .ipa artifact, SDL touch events into the same pointer path
-   as the mouse, Files-app import of the channel contents, ATS exception for
-   WiiLink's plain HTTP. Watch for `long` (64-bit on iOS, 32 on Windows) in
-   anything the audit missed.
-6. **Touch design** (milestone 7, with the iPhone layout): replacements for
+5. **Touch design** (milestone 7, with the iPhone layout): replacements for
    hover highlights, B (back), +/- (globe zoom: pinch), 1/2; bigger hit areas.

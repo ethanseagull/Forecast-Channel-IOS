@@ -259,6 +259,19 @@ GPU texture memory on the globe: 123 MB -> 22 MB (BC1), 497 MB -> 98 MB with the
   the spec (`tools/texcodec_test`), not on an ASTC GPU yet.
 - The log's frame line reports resident texture memory.
 
+### iOS preparation (2026-11-16)
+- No Nintendo data at build time: the tables the decomp compiles in from the DOL (error screen
+  layout, globe dots) are read from the user's `00000001.app` at start-up (`port/sdk/import.c`).
+- Import: the channel files (`00000001.app`, `00000006.app`-`0000000a.app`) dropped into the data
+  folder (iOS: the app's Documents, via the Files app) are unpacked into `content/` at start-up.
+- Port threads allocate from the C heap (`port_mark_host_thread`): the channel's MEM heaps are
+  single-threaded (a texture loader corrupted one).
+- Stubs: `PORT_SYM` for Mach-O names; the MSVC `/alternatename` aliases only on Windows.
+- `nus_fetch.ps1` reads the Wii common key from `WII_COMMON_KEY` or `common-key.txt` (ignored).
+- iOS target: CMake app bundle (`port/ios/Info.plist.in`), SDL3 built from source, Metal
+  shaders generated from the HLSL by `tools/build_shaders_msl.sh` (glslang + SPIRV-Cross),
+  GitHub Actions workflow `.github/workflows/ios.yml` -> unsigned `ForecastOS.ipa`.
+
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.

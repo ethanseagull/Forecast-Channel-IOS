@@ -3596,10 +3596,44 @@ index 567a011..cab9650 100644
      GX_SET_REG_FIELD(cmd, 24, 0, physAddr >> 5);
      GX_SET_REG_FIELD(cmd, 8, 24, GX_BP_REG_TEXCOPYDST);
 diff --git a/src/revolution/GX/GXGeometry.c b/src/revolution/GX/GXGeometry.c
-index 6802854..5693492 100644
+index 6802854..136f978 100644
 --- a/src/revolution/GX/GXGeometry.c
 +++ b/src/revolution/GX/GXGeometry.c
-@@ -137,19 +137,19 @@ void GXBegin(GXPrimitive prim, GXVtxFmt fmt, u16 verts) {
+@@ -1,6 +1,14 @@
+ #include <revolution/GX.h>
+ 
+-inline void __GXSetAmbMat(u32 dirtyFlags) {
++// C99 inline emits no out-of-line copy; calls Clang does not inline then
++// have nothing to link to on non-Windows hosts.
++#ifdef FORECAST_PORT
++#define GX_GEOMETRY_INLINE static inline
++#else
++#define GX_GEOMETRY_INLINE inline
++#endif
++
++GX_GEOMETRY_INLINE void __GXSetAmbMat(u32 dirtyFlags) {
+     if (dirtyFlags & GX_DIRTY_AMB_COLOR0) {
+         GX_XF_LOAD_REG(GX_XF_REG_AMBIENT0, *(u32*)&gxdt->ambColors[0]);
+     }
+@@ -18,7 +26,7 @@ inline void __GXSetAmbMat(u32 dirtyFlags) {
+     }
+ }
+ 
+-inline void __GXSetLightChan(volatile s32 dirtyFlags) {
++GX_GEOMETRY_INLINE void __GXSetLightChan(volatile s32 dirtyFlags) {
+     int i;
+     u32 bits;
+     u32 addr = GX_XF_REG_COLOR0CNTRL;
+@@ -38,7 +46,7 @@ inline void __GXSetLightChan(volatile s32 dirtyFlags) {
+     }
+ }
+ 
+-inline void __GXSetTexGen(volatile s32 dirtyFlags) {
++GX_GEOMETRY_INLINE void __GXSetTexGen(volatile s32 dirtyFlags) {
+     int i;
+     u32 bits;
+     u32 taddr = GX_XF_REG_TEX0;
+@@ -137,19 +145,19 @@ void GXBegin(GXPrimitive prim, GXVtxFmt fmt, u16 verts) {
          __GXSendFlushPrim();
      }
  
