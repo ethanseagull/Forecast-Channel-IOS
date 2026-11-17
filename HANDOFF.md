@@ -44,8 +44,10 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
   at 0.85:0.9 on the weather pages), `FORECAST_BUTTON=frame:minus|plus|b|home|1|2:frames[;...]`,
   `FORECAST_LOG_DRAWS=n` (TEV, indirect and blend state of every draw in frame
   n); the log prints fps and busy % every 600 frames. Shaders:
-  `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound is off until its archive is converted
-  (`Sound.cpp`, `SoundManager.cpp`, `WeatherScene.cpp`). The cursor effect is
+  `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound plays: `rev_wtr.brsar` is converted at load
+  (`port/res/brsar_swap.cpp`) and AX/AI are emulated (`port/sdk/ax.c`, `ai.c`)
+  onto an SDL3 audio stream; `FORECAST_MUTE=1` silences it (frames still run),
+  `FORECAST_AUDIO_RAW=file` captures the mix (s16 stereo 32 kHz). The cursor effect is
   dropped for good (`Scene.cpp`): the targets are touchscreens, so no cursor
   is drawn; touch drives the Wii pointer underneath (`PLAN.md` item 4).
 - **Wii match:** with `patches/decomp-port.patch` applied the decomp's DOL
@@ -118,11 +120,12 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    GPU, and with the Earth pack (2048x2048) about 470 MB. iOS will want a
    compressed GPU format (BC1/ASTC) or smaller tiles there.
 3. **Rest of `notes/64bit-audit.md`.** PAT0 bind arrays (no PAT0 in
-   earth.brres; only if another file needs them); snd TaskManager unit size (with sound); make
+   earth.brres; only if another file needs them); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
    items are moot (cursor effect dropped).
-4. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then
-   remove the port skips.
+4. **Sound check by ear.** Milestone 5 is done and the captured output looks
+   like music (levels, spectrum, stereo, no clipping), but nobody has listened
+   yet: compare with Dolphin (BGM per scene, button SEs, reverb).
 5. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
    runner, unsigned .ipa artifact, SDL touch events into the same pointer path
    as the mouse, Files-app import of the channel contents, ATS exception for

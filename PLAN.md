@@ -226,14 +226,31 @@ satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
   ready (no frame-rate cost measured in Release).
 - Input: keys for the Remote's other buttons (`kpad.c`); `FORECAST_BUTTON` for scripted runs.
 
+### Milestone 5: done (2026-11-16): sound
+- `port/res/brsar_swap.cpp`: the sound archive (RSAR: SYMB, INFO, FILE) and the files inside it
+  (RSEQ headers and labels, RBNK instruments and wave info incl. ADPCM coefficients; RWSD handled
+  but unused here) to native byte order, from `MemorySoundArchive::Setup`. Wave samples stay
+  big-endian (the DSP reads them); sequence bytecode is read byte by byte. rev_wtr.brsar: 51
+  sequences, one bank of 42 mono DSP-ADPCM waves (44.1 / 32 kHz), no streams.
+- snd 64-bit: TaskManager units 0x80 bytes; AxVoice NULL checks; Wii-address DataRefs return NULL.
+- `port/sdk/ax.c`: the AX library. CPU side after the decomp's AX (voice stacks, priorities and
+  stealing, AXSetVoice* with sync flags, DSP cycle budget); DSP side after Dolphin's AX HLE
+  (ADPCM / PCM16 / PCM8, loops with ADPCM loop context, SRC none / linear / 4-tap polyphase with
+  generated coefficients, volume envelope, LPF, biquad, 12 buses with ramps, depop, aux callbacks,
+  fold-down, master volume). Volume ramps last one frame (nw4r re-sends them every frame).
+- `port/sdk/ai.c`: a 3 ms frame thread calls the AX frame (as the AI DMA interrupt, under the
+  interrupts lock) and queues 96-sample frames on an SDL3 audio stream (32 kHz stereo), keeping
+  the device buffer plus ~2 frames queued. `axfx.c`: AXFX hooks; the reverb is the decomp's own
+  `AXFXReverbHi*.c`, now compiled in. `SCGetSoundMode` says stereo.
+- `OSReturnToMenu` releases the interrupts lock before stopping the audio thread (exiting could
+  deadlock against the frame thread).
+
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.
-- Sound, temporarily (brsar not converted, AX not ported; `Sound.cpp`, `SoundManager.cpp`).
 
 ### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
-- snd TaskManager 0x40-byte units vs larger 64-bit tasks (when sound comes back).
 - (ef relocation items: moot, the cursor effect is dropped.)
 - `port_gx_addr` should assert in debug builds when given a stack / C-heap pointer.
 

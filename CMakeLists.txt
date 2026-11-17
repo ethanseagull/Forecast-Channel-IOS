@@ -77,7 +77,10 @@ foreach(unit IN LISTS DECOMP_UNITS)
         continue()
     endif()
     if(unit MATCHES "^revolution/")
-        if(NOT unit MATCHES "^revolution/(MEM|CX|ARC|TPL|GX)/" AND NOT unit STREQUAL "revolution/MTX/mtx44")
+        # The reverb (AXFXReverbHi*) is plain C over AX's aux buffers; AX and
+        # AXFX's hooks are port/sdk/ax.c and axfx.c.
+        if(NOT unit MATCHES "^revolution/(MEM|CX|ARC|TPL|GX)/" AND NOT unit STREQUAL "revolution/MTX/mtx44"
+           AND NOT unit MATCHES "^revolution/AXFX/AXFXReverbHi")
             continue()
         endif()
         # The FIFO, synchronisation and performance counters are hardware;

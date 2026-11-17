@@ -74,6 +74,16 @@ void SwapResFileToNative(void* file);
 } // namespace nw4r
 
 namespace nw4r {
+namespace snd {
+namespace port {
+// BRSAR and the RSEQ / RBNK / RWSD files in it (wave samples and sequence
+// bytecode stay big-endian): called by MemorySoundArchive::Setup.
+void SwapSoundArchiveToNative(void* file);
+} // namespace port
+} // namespace snd
+} // namespace nw4r
+
+namespace nw4r {
 namespace ut {
 namespace port {
 // RFNT / RFNA: called by ResFont::SetResource and the ArchiveFont entry points.

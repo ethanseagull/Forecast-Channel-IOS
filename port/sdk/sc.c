@@ -63,6 +63,9 @@ BOOL SCGetIdleMode(SCIdleModeInfo* mode) {
     return TRUE;
 }
 
+// Stereo (the stub returned 0, mono: the channel and nw4r::snd would mix down).
+u8 SCGetSoundMode(void) { return SC_SND_STEREO; }
+
 u8 SCGetAspectRatio(void) { return SC_ASPECT_WIDE; }
 
 u8 SCGetProgressiveMode(void) { return 1; }

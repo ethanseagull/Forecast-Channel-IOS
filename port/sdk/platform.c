@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include <port_log.h>
+#include <port_audio.h>
 #include <port_platform.h>
 
 static SDL_Window* sWindow;
@@ -39,13 +40,21 @@ bool port_platform_init(void) {
 // "Back to the Wii Menu": on the Wii this never returns. On Windows the app
 // quits. (iOS apps must not quit themselves; milestone 6 decides what it
 // does there.)
+int OSEnableInterrupts(void);
+
 void OSReturnToMenu(void) {
     port_log("OSReturnToMenu: quitting after %u frames\n", sFrame);
+    // The channel calls this with interrupts disabled (the port's global
+    // lock held). The audio frame thread takes that lock every frame, so
+    // release it before port_platform_quit waits for that thread.
+    OSEnableInterrupts();
     port_platform_quit();
     exit(0);
 }
 
 void port_platform_quit(void) {
+    // Stop the audio frame thread before SDL goes away (port/sdk/ai.c).
+    port_audio_shutdown();
     SDL_DestroyWindow(sWindow);
     SDL_Quit();
 }

@@ -489,6 +489,38 @@ index 3c593d8..568d8c0 100644
  }
  
  inline VEC3* VEC3Cross(VEC3* pOut, const VEC3* pA, const VEC3* pB) {
+diff --git a/include/nw4r/snd/snd_AxVoice.h b/include/nw4r/snd/snd_AxVoice.h
+index 1dc53ae..bb09668 100644
+--- a/include/nw4r/snd/snd_AxVoice.h
++++ b/include/nw4r/snd/snd_AxVoice.h
+@@ -125,6 +125,13 @@ public:
+     u32 GetCurrentPlayingDspAddress() const {
+         ut::AutoInterruptLock lock;
+ 
++#ifdef FORECAST_PORT
++        // &mVpb->pb is never NULL (the compiler may drop the check): test
++        // the voice itself, which the DSP-drop callback clears.
++        if (mVpb == NULL) {
++            return 0;
++        }
++#endif
+         const AXPB* pPb = &mVpb->pb;
+         if (pPb == NULL) {
+             return 0;
+@@ -136,6 +143,13 @@ public:
+     u32 GetLoopEndDspAddress() const {
+         ut::AutoInterruptLock lock;
+ 
++#ifdef FORECAST_PORT
++        // &mVpb->pb is never NULL (the compiler may drop the check): test
++        // the voice itself, which the DSP-drop callback clears.
++        if (mVpb == NULL) {
++            return 0;
++        }
++#endif
+         const AXPB* pPb = &mVpb->pb;
+         if (pPb == NULL) {
+             return 0;
 diff --git a/include/nw4r/snd/snd_AxfxImpl.h b/include/nw4r/snd/snd_AxfxImpl.h
 index e2ad2f7..8c5b70c 100644
 --- a/include/nw4r/snd/snd_AxfxImpl.h
@@ -561,6 +593,42 @@ index 4f7ef65..23eb614 100644
      bool PrepareSound(SoundHandle* pHandle, int id) {
          return detail_PrepareSound(pHandle, id, NULL, NULL, NULL) ==
                 START_SUCCESS;
+diff --git a/include/nw4r/snd/snd_TaskManager.h b/include/nw4r/snd/snd_TaskManager.h
+index b0ac3c8..f778a87 100644
+--- a/include/nw4r/snd/snd_TaskManager.h
++++ b/include/nw4r/snd/snd_TaskManager.h
+@@ -23,7 +23,15 @@ public:
+         PRIORITY_MAX
+     };
+ 
++#ifdef FORECAST_PORT
++    // The load tasks (SoundArchivePlayer's SeqLoadTask, StrmHeaderLoadTask,
++    // StrmDataLoadTask) outgrow 0x40 bytes with 64-bit pointers; checked by
++    // static_asserts in snd_SoundArchivePlayer.cpp. Units are 16-aligned.
++    static const int TASK_SIZE_MAX = 0x80;
++    static const int TASK_ALIGN = 16;
++#else
+     static const int TASK_SIZE_MAX = 0x40;
++#endif
+     static const int TASK_COUNT_MAX = 128;
+ 
+ public:
+@@ -38,7 +46,15 @@ public:
+     void CancelByTaskId(u32 taskId);
+ 
+ private:
++#ifdef FORECAST_PORT
++    // Room for the unit heap's own heads (MEMiHeapHead + MEMiUntHeapHead,
++    // larger on 64-bit) in front of the units, and for aligning them.
++    static const int TASK_HEAP_HEAD_SIZE = 0x100;
++    static const int TASK_AREA_SIZE =
++        TASK_COUNT_MAX * TASK_SIZE_MAX + TASK_HEAP_HEAD_SIZE + TASK_ALIGN;
++#else
+     static const int TASK_AREA_SIZE = TASK_COUNT_MAX * TASK_SIZE_MAX + 0x44;
++#endif
+ 
+ private:
+     TaskManager();
 diff --git a/include/nw4r/snd/snd_Types.h b/include/nw4r/snd/snd_Types.h
 index 8f3c67e..5d544e9 100644
 --- a/include/nw4r/snd/snd_Types.h
@@ -1724,152 +1792,6 @@ index 4b30a36..b960602 100644
      file.Init();
      file.Bind();
      mResMdl = file.GetResMdl(0);
-diff --git a/src/Sound.cpp b/src/Sound.cpp
-index 2e98f66..d4563c2 100644
---- a/src/Sound.cpp
-+++ b/src/Sound.cpp
-@@ -8,7 +8,14 @@
- #include <revolution/SC/scapi.h>
- 
- Sound::Sound(const char* path, void* heap) {
-+#ifdef FORECAST_PORT
-+    // The sound archive (brsar) is still big-endian and AX is not ported:
-+    // sound stays off (milestone 5). SoundManager's entry points check this.
-+    OSReport("port: sound archive %s not loaded yet (sound off)\n", path);
-+    mData = NULL;
-+#else
-     mData = LoadContentFile(gUnk80330B64, path, 32, NULL, gMEM2Heap);
-+#endif
-     mHeap = heap;
- 
-     if (mData != NULL) {
-diff --git a/src/SoundManager.cpp b/src/SoundManager.cpp
-index 612909c..4cc4877 100644
---- a/src/SoundManager.cpp
-+++ b/src/SoundManager.cpp
-@@ -374,6 +374,11 @@ void ExitSoundManager() {
- }
- 
- void UpdateSoundManager() {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     sVolumeRamps[0].Update();
-     sVolumeRamps[1].Update();
-     sVolumeRamps[2].Update();
-@@ -386,6 +391,11 @@ void UpdateSoundManager() {
- }
- 
- void SetSoundManagerOutputMode(u8 scMode) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     sOutputMode = scMode;
-     ApplyOutputMode(scMode);
- }
-@@ -512,6 +522,11 @@ static inline void SetVolumeAndMute(snd::SoundHandle* handle, f32 volume) {
- }
- 
- void PlaySE(s32 id) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     snd::SoundHandle* handle = sEffectHandle;
-     StartWatched(handle, id);
-     SetVolumeAndMute(handle, 1.0f);
-@@ -520,6 +535,11 @@ void PlaySE(s32 id) {
- }
- 
- void PlayLoopSE(s32 id, f32 volume, f32 pitch, f32 pan, f32 unused) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     snd::SoundHandle* handle = sEffectHandle;
-     StartWatched(handle, id);
-     SetVolumeAndMute(handle, volume);
-@@ -528,34 +548,74 @@ void PlayLoopSE(s32 id, f32 volume, f32 pitch, f32 pan, f32 unused) {
- }
- 
- void StartSound(snd::SoundHandle* handle, u32 id) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     StartWatched(handle, id);
- }
- 
- void StopSound(snd::SoundHandle* handle, s32 fadeFrames) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     handle->Stop(fadeFrames);
- }
- 
- void PauseSound(snd::SoundHandle* handle, bool pause, s32 fadeFrames) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     handle->Pause(pause, fadeFrames);
- }
- 
- bool IsSoundPaused(snd::SoundHandle* handle) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return false;
-+    }
-+#endif
-     return handle->IsAttachedSound() && handle->detail_GetAttachedSound()->IsPause();
- }
- 
- void SetSoundVolume(snd::SoundHandle* handle, f32 volume) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     SetVolumeAndMute(handle, volume);
- }
- 
- void SetSoundPitch(snd::SoundHandle* handle, f32 pitch) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     handle->SetPitch(pitch);
- }
- 
- void SetSoundPan(snd::SoundHandle* handle, f32 pan) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return;
-+    }
-+#endif
-     handle->SetPan(pan);
- }
- 
- bool IsSoundPlaying(snd::SoundHandle* handle) {
-+#ifdef FORECAST_PORT
-+    if (!sReady) { // sound is off on the port until the archive is converted
-+        return false;
-+    }
-+#endif
-     return handle->IsAttachedSound();
- }
- 
 diff --git a/src/System.cpp b/src/System.cpp
 index 8a3b2b2..b70968f 100644
 --- a/src/System.cpp
@@ -2053,23 +1975,10 @@ index df8263c..4ed0250 100644
  
  static void ZoomOutColorCallback(nw4r::lyt::Pane* pane, const GXColor* color) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..42c94f6 100644
+index 661a8c4..789dd07 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
-@@ -171,7 +171,12 @@ WeatherScene::WeatherScene()
-     gHomeCountryCode = gCountryCode;
- 
-     gSound = new Sound("rev_wtr.brsar", gHomeButton->mSoundData);
-+#ifdef FORECAST_PORT
-+    // Sound is off on the port for now (Sound.cpp): not fatal.
-+    if (gSound == NULL) {
-+#else
-     if (gSound == NULL || gSound->mData == NULL) {
-+#endif
-         OSReport("%s[%d]:m_pSound\n", "d_s_weather.cpp", 345);
-         RequestFatal();
-         return;
-@@ -185,8 +190,8 @@ WeatherScene::WeatherScene()
+@@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
          RequestFatal();
          return;
      }
@@ -2080,7 +1989,7 @@ index 661a8c4..42c94f6 100644
  
      mLayoutArc = LoadCompressedContentFile(gUnk80330B64, "weather_layout.arc.LZ", 32, NULL, gMEM2Heap);
      if (mLayoutArc == NULL) {
-@@ -526,11 +531,11 @@ void WeatherScene::DrawNormal() {
+@@ -526,11 +526,11 @@ void WeatherScene::DrawNormal() {
  
      SetDefaultGXState();
      SetOrthoProjection();
@@ -3132,6 +3041,31 @@ index b4e52cb..2f59ddc 100644
      void* pBlock = MEMAllocFromFrmHeap(mCurrentFx->mHeap, size);
  
      mCurrentFx->mAllocCount++;
+diff --git a/src/nw4r/snd/snd_MemorySoundArchive.cpp b/src/nw4r/snd/snd_MemorySoundArchive.cpp
+index a068b21..3b84f0b 100644
+--- a/src/nw4r/snd/snd_MemorySoundArchive.cpp
++++ b/src/nw4r/snd/snd_MemorySoundArchive.cpp
+@@ -2,6 +2,9 @@
+ #include <nw4r/ut.h>
+ 
+ #include <cstring>
++#ifdef FORECAST_PORT
++#include <port_res.h>
++#endif
+ 
+ namespace nw4r {
+ namespace snd {
+@@ -53,6 +56,10 @@ MemorySoundArchive::MemorySoundArchive() : mData(NULL) {}
+ MemorySoundArchive::~MemorySoundArchive() {}
+ 
+ bool MemorySoundArchive::Setup(const void* pBuffer) {
++#ifdef FORECAST_PORT
++    // The archive (and the files in it, read in place) is big-endian.
++    port::SwapSoundArchiveToNative(const_cast<void*>(pBuffer));
++#endif
+     mFileReader.Init(pBuffer);
+     SoundArchive::Setup(&mFileReader);
+ 
 diff --git a/src/nw4r/snd/snd_SeqTrack.cpp b/src/nw4r/snd/snd_SeqTrack.cpp
 index 38fbfaf..ab7daf0 100644
 --- a/src/nw4r/snd/snd_SeqTrack.cpp
@@ -3155,10 +3089,24 @@ index 38fbfaf..ab7daf0 100644
  
          pChannel = mPlayer->NoteOn(mParserTrackParam.bankNo, info);
 diff --git a/src/nw4r/snd/snd_SoundArchivePlayer.cpp b/src/nw4r/snd/snd_SoundArchivePlayer.cpp
-index f974e6e..bf38083 100644
+index f974e6e..75fb5bd 100644
 --- a/src/nw4r/snd/snd_SoundArchivePlayer.cpp
 +++ b/src/nw4r/snd/snd_SoundArchivePlayer.cpp
-@@ -743,7 +743,7 @@ SoundStartable::StartResult SoundArchivePlayer::PrepareSeqImpl(
+@@ -22,6 +22,13 @@ SoundArchivePlayer::SoundArchivePlayer()
+       mMmlSeqTrackAllocator(&mMmlParser),
+       mSetupBufferAddress(NULL),
+       mSetupBufferSize(0) {
++#ifdef FORECAST_PORT
++    // The load tasks are placement-new'd into TaskManager units.
++    static_assert(sizeof(SeqLoadTask) <= detail::TaskManager::TASK_SIZE_MAX, "SeqLoadTask");
++    static_assert(sizeof(StrmHeaderLoadTask) <= detail::TaskManager::TASK_SIZE_MAX, "StrmHeaderLoadTask");
++    static_assert(sizeof(StrmDataLoadTask) <= detail::TaskManager::TASK_SIZE_MAX, "StrmDataLoadTask");
++    static_assert(alignof(StrmDataLoadTask) <= detail::TaskManager::TASK_ALIGN, "StrmDataLoadTask");
++#endif
+ 
+     detail::DisposeCallbackManager::GetInstance().RegisterDisposeCallback(this);
+ }
+@@ -743,7 +750,7 @@ SoundStartable::StartResult SoundArchivePlayer::PrepareSeqImpl(
          detail::SeqFileReader reader(pSeqBin);
          pSound->Prepare(reader.GetBaseAddress(), pSeqInfo->dataOffset);
      } else {
@@ -3167,7 +3115,7 @@ index f974e6e..bf38083 100644
      }
  
      return SoundStartable::START_SUCCESS;
-@@ -836,7 +836,7 @@ int SoundArchivePlayer::SeqLoader::LoadAsync(
+@@ -836,7 +843,7 @@ int SoundArchivePlayer::SeqLoader::LoadAsync(
          return detail::StrmPlayer::LOAD_RESULT_FAILED;
      }
  
@@ -3176,7 +3124,7 @@ index f974e6e..bf38083 100644
      const SoundArchive& rArchive = mSoundArchivePlayer.GetSoundArchive();
      u32 id = pSound->GetId();
  
-@@ -971,7 +971,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadHeader(
+@@ -971,7 +978,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadHeader(
      const SoundArchive& rArchive = mSoundArchivePlayer.GetSoundArchive();
  
      detail::Task* pTask = new (pBuffer)
@@ -3185,7 +3133,7 @@ index f974e6e..bf38083 100644
                             pCallback, pCallbackArg, &mMutex);
  
      detail::TaskManager::GetInstance().AppendTask(
-@@ -997,7 +997,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadData(
+@@ -997,7 +1004,7 @@ detail::StrmPlayer::LoadResult SoundArchivePlayer::StrmLoader::LoadData(
      detail::Task* pTask = new (detail::TaskManager::GetInstance().Alloc())
          StrmDataLoadTask(pBuffer, size, offset, channels, blockSize,
                           blockHeaderOffset, needUpdateAdpcmLoop, pCallback,
@@ -3194,7 +3142,7 @@ index f974e6e..bf38083 100644
                           &mMutex);
  
      detail::TaskManager::GetInstance().AppendTask(
-@@ -1013,7 +1013,7 @@ void SoundArchivePlayer::StrmLoader::Cancel(detail::StrmPlayer* pPlayer,
+@@ -1013,7 +1020,7 @@ void SoundArchivePlayer::StrmLoader::Cancel(detail::StrmPlayer* pPlayer,
  #pragma unused(userData)
  
      detail::TaskManager::GetInstance().CancelByTaskId(
@@ -3225,6 +3173,24 @@ index f61cbdc..c5f1a03 100644
              break;
          }
      }
+diff --git a/src/nw4r/snd/snd_TaskManager.cpp b/src/nw4r/snd/snd_TaskManager.cpp
+index 71c5148..fba478c 100644
+--- a/src/nw4r/snd/snd_TaskManager.cpp
++++ b/src/nw4r/snd/snd_TaskManager.cpp
+@@ -15,7 +15,13 @@ TaskManager& TaskManager::GetInstance() {
+ // LinkList ctor/dtor are emitted after the TaskManager dtor, as in the target.
+ TaskManager::TaskManager() : mCurrentTask(NULL) {
+     OSInitMutex(&mMutex);
++#ifdef FORECAST_PORT
++    static_assert(sizeof(MEMiHeapHead) + sizeof(MEMiUntHeapHead) <= TASK_HEAP_HEAD_SIZE,
++                  "TaskManager: unit heap heads");
++    mHeap = MEMCreateUnitHeapEx(sTaskArea, TASK_AREA_SIZE, TASK_SIZE_MAX, TASK_ALIGN, 0);
++#else
+     mHeap = MEMCreateUnitHeapEx(sTaskArea, TASK_AREA_SIZE, TASK_SIZE_MAX, 4, 0);
++#endif
+ }
+ 
+ void* TaskManager::Alloc() {
 diff --git a/src/nw4r/snd/snd_TaskThread.cpp b/src/nw4r/snd/snd_TaskThread.cpp
 index d1f07a8..a12cc34 100644
 --- a/src/nw4r/snd/snd_TaskThread.cpp
@@ -3241,6 +3207,25 @@ index d1f07a8..a12cc34 100644
              break;
          }
      }
+diff --git a/src/nw4r/snd/snd_Util.cpp b/src/nw4r/snd/snd_Util.cpp
+index e836a54..98af943 100644
+--- a/src/nw4r/snd/snd_Util.cpp
++++ b/src/nw4r/snd/snd_Util.cpp
+@@ -91,7 +91,14 @@ const void* Util::GetDataRefAddressImpl(RefType type, u32 value,
+     }
+ 
+     if (type == REFTYPE_ADDRESS) {
++#ifdef FORECAST_PORT
++        // A 32-bit Wii address cannot be a pointer here. Only the null
++        // reference (address 0) occurs in the files the channel loads; the
++        // archive converter (port/res/brsar_swap.cpp) reports any other.
++        return NULL;
++#else
+         return reinterpret_cast<void*>(Util::ReadBigEndian(value));
++#endif
+     }
+ 
+     return NULL;
 diff --git a/src/nw4r/snd/snd_WsdTrack.cpp b/src/nw4r/snd/snd_WsdTrack.cpp
 index e1da5ee..3828177 100644
 --- a/src/nw4r/snd/snd_WsdTrack.cpp

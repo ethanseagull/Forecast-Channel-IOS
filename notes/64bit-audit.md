@@ -327,6 +327,7 @@ for the formats.
   - These tasks are placement-new'd at `snd_SoundArchivePlayer.cpp:858, 973, 997`, so each overruns the next unit and corrupts the unit-heap free list on the first stream load.
   - The 0x44 header allowance is also too small for the 64-bit `MEMiHeapHead`.
   - Fix: `TASK_SIZE_MAX = RoundUp(max(sizeof(...Task)), 16)`, a header allowance from `sizeof`, alignment 16, and a `static_assert`.
+  - **Fixed** (`FORECAST_PORT`): 0x80-byte units at 16-byte alignment, a 0x100-byte head allowance with a `static_assert` against the MEM heads, and `static_assert`s on the three load tasks in the `SoundArchivePlayer` constructor.
 - **[Medium]** `src/nw4r/snd/snd_AxVoice.cpp:196-258` — `GetDspAddressBySample` / `GetSampleByDspAddress` use `static_cast<u32>(PTR_ADDR(OSCachedToPhysical(p)))`. The build flags these at `:208-252`.
   - With the new `OSCachedToPhysical`, the value is a GX address below 0x20000000, so the ADPCM nibble address (`addr*2+2`) still fits in 32 bits.
   - Fix: `(u32)(uintptr_t)OSCachedToPhysical(p)`, or `GX_ADDR(p)` directly.
@@ -350,9 +351,11 @@ for the formats.
   - `NandFileStream` probably exceeds 512 bytes on 64-bit, but the game uses `MemorySoundArchive` (`SoundManager.cpp:243`), whose `MemoryFileStream` fits.
   - Fix: `alignas(16)`, a size taken from `sizeof`, and a `static_assert`.
 - **[Low]** `include/nw4r/snd/snd_Util.h:55-60` and `snd_Util.cpp:93-95` — the `DataRef` REFTYPE_ADDRESS branch casts the 32-bit value to a pointer. It is unused by these files. Make it an assert.
+  - **Fixed:** returns NULL on the port; `port/res/brsar_swap.cpp` reports any non-null address reference.
 - **[Low]** `snd_SoundArchivePlayer.cpp:974, 1000, 1016` — a `StrmPlayer*` is used as the u32 task id (compare-only; build errors). Use `PTR_TO_U32` (the players live in the arena) or widen `Task::mTaskId`.
 - **[Low]** `snd_AxManager.cpp:358`, `snd_SoundThread.cpp:65, 94`, `snd_TaskThread.cpp:46, 48` — enum values carried in `void*` are read back with `reinterpret_cast<u32>` (build errors). Use `(u32)(uintptr_t)`.
 - **[Low]** `include/nw4r/snd/snd_AxVoice.h:128-131` — `&mVpb->pb == NULL` is never true. Test `mVpb == NULL`.
+  - **Fixed:** both accessors test `mVpb == NULL` first on the port.
 - **[Low]** `snd_SoundSystem.cpp:18-24, 76-109` — the 16 KB sound and DVD thread stacks are tight for 64-bit frames if the thread shim uses the supplied stacks.
 - **Checked:**
   - `DisposeCallbackManager` and the `Invalidate*` paths compare real pointers.
