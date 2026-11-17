@@ -6,6 +6,20 @@
 // point for one frame (so the channel can hover the button under it), then
 // holds A until the touch ends; the pointer stays one frame after release so
 // the release lands on the same button.
+//
+// Gestures for what the Remote does without pointing:
+// - Tap: the globe's button bars show only while the Wii pointer is on screen
+//   and moving or near the top or bottom edge (WeatherAround::UpdateButtonFade).
+//   A finger has no hover, so after a tap the pointer is "parked" just off the
+//   screen's top-left corner, where it hovers nothing but counts as at the top
+//   edge: the bars slide in and stay for PARK_FRAMES. Tapping the middle of the
+//   screen again hides them; tapping the bars (a button) keeps them.
+// - Pinch: zoom the globe (- / + on the Remote), one step per PINCH_STEP.
+// - Two-finger swipe up / down: Up / Down on the Remote's + pad (the globe's
+//   tilt; the page above / below on the forecast pages).
+// - Mouse wheel (Windows): zoom.
+// While two fingers are down the pointer is off screen and A is released, so
+// the globe does not spin.
 #include <revolution/OS.h>
 #include <revolution/KPAD.h>
 #include <revolution/SC.h>
@@ -23,6 +37,117 @@
 // The pointer was down last frame / one frame of "hover" has been shown.
 static bool sWasDown, sHovered, sShowAfterRelease;
 static u32 sHold;
+
+#define PARK_FRAMES 300       // bars shown after a tap (5 s)
+#define TAP_FRAMES 20         // a touch at most this long ...
+#define TAP_MOVE 0.03f        // ... moving at most this (window heights) is a tap
+#define BAR_EDGE 0.72f        // |pointer y| beyond this: the bars (y 63 / 393 of 456)
+#define PINCH_STEP 1.18f      // finger distance ratio per zoom step
+#define SWIPE_STEP 0.12f      // two-finger travel (window heights) per Up / Down
+#define PARK_X (-1.025f)      // ~8 px left of the screen (the channel counts x >= -16)
+#define PARK_Y (-1.0f)        // the top edge
+
+static u32 sFrame;
+// Single touch: when it started, where, how far it moved; whether the bars
+// were parked when it started.
+static u32 sTouchStart;
+static f32 sTouchX0, sTouchY0, sTouchMove;
+static bool sTouchWasParked;
+static u32 sParkUntil;
+// Two-finger gesture: active until every finger and the mouse button are up.
+static bool sGesture;
+static f32 sPinchDist0, sSwipeY0;
+// Button pulses (one frame down, then at least one frame up).
+static u32 sPulseQueue[8];
+static int sPulseCount;
+static u32 sPulseCooldown;
+static f32 sWheel;
+
+static void pulse(u32 button) {
+    if (sPulseCount < (int)SDL_arraysize(sPulseQueue)) {
+        sPulseQueue[sPulseCount++] = button;
+    }
+}
+
+static bool SDLCALL wheel_watch(void* user, SDL_Event* e) {
+    (void)user;
+    if (e->type == SDL_EVENT_MOUSE_WHEEL) {
+        sWheel += e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e->wheel.y : e->wheel.y;
+    }
+    return true;
+}
+
+// The fingers on the screen (window-relative 0..1), real or scripted:
+// FORECAST_FINGERS=frame:frames:x1:y1:x2:y2:x1':y1':x2':y2'[;...] moves two
+// fingers from the first positions to the second over those frames.
+static int get_fingers(f32* xy, int max) {
+    const char* script = SDL_getenv("FORECAST_FINGERS");
+    if (script != NULL && script[0] != '\0') {
+        for (const char* t = script; t != NULL && *t != '\0';) {
+            unsigned start = 0, len = 0;
+            float p[8];
+            if (SDL_sscanf(t, "%u:%u:%f:%f:%f:%f:%f:%f:%f:%f", &start, &len, &p[0], &p[1], &p[2], &p[3], &p[4],
+                           &p[5], &p[6], &p[7]) == 10 &&
+                sFrame >= start && sFrame < start + len && max >= 2) {
+                f32 f = len > 1 ? (f32)(sFrame - start) / (f32)(len - 1) : 1.0f;
+                for (int i = 0; i < 4; i++) {
+                    xy[i] = p[i] + (p[4 + i] - p[i]) * f;
+                }
+                return 2;
+            }
+            t = SDL_strchr(t, ';');
+            if (t != NULL) {
+                t++;
+            }
+        }
+        return 0;
+    }
+    int n = 0, devices = 0;
+    SDL_TouchID* ids = SDL_GetTouchDevices(&devices);
+    for (int d = 0; ids != NULL && d < devices; d++) {
+        if (ids[d] == SDL_MOUSE_TOUCHID || ids[d] == SDL_PEN_TOUCHID) {
+            continue;
+        }
+        int count = 0;
+        SDL_Finger** fingers = SDL_GetTouchFingers(ids[d], &count);
+        for (int i = 0; fingers != NULL && i < count && n < max; i++, n++) {
+            xy[n * 2] = fingers[i]->x;
+            xy[n * 2 + 1] = fingers[i]->y;
+        }
+        SDL_free(fingers);
+    }
+    SDL_free(ids);
+    return n;
+}
+
+// Two fingers: pinch and swipe steps.
+static void track_gesture(const f32* xy, bool start) {
+    int w = 1, h = 1;
+    SDL_GetWindowSize(port_window(), &w, &h);
+    f32 aspect = h > 0 ? (f32)w / (f32)h : 1.0f;
+    f32 dx = (xy[2] - xy[0]) * aspect, dy = xy[3] - xy[1];
+    f32 dist = SDL_sqrtf(dx * dx + dy * dy);
+    f32 midY = (xy[1] + xy[3]) * 0.5f;
+    if (start || sPinchDist0 <= 0.0f) {
+        sPinchDist0 = dist;
+        sSwipeY0 = midY;
+        return;
+    }
+    if (dist > sPinchDist0 * PINCH_STEP) {
+        pulse(WPAD_BUTTON_PLUS); // spread: closer
+        sPinchDist0 *= PINCH_STEP;
+    } else if (dist < sPinchDist0 / PINCH_STEP) {
+        pulse(WPAD_BUTTON_MINUS); // pinch: farther
+        sPinchDist0 /= PINCH_STEP;
+    }
+    if (midY > sSwipeY0 + SWIPE_STEP) {
+        pulse(WPAD_BUTTON_UP); // pulled down: what is above
+        sSwipeY0 += SWIPE_STEP;
+    } else if (midY < sSwipeY0 - SWIPE_STEP) {
+        pulse(WPAD_BUTTON_DOWN);
+        sSwipeY0 -= SWIPE_STEP;
+    }
+}
 
 void KPADInit(void) {}
 void KPADSetPosParam(s32 chan, f32 playRadius, f32 sensitivity) {
@@ -57,8 +182,7 @@ static void window_to_pos(f32 wx, f32 wy, Vec2* pos) {
     pos->y = (wy - y0) / dh * 2.0f - 1.0f;
 }
 
-// The Wii Remote's other buttons, until the touch design (milestone 7) gives
-// them gestures: keys on Windows (- / + zoom the globe, Esc or Backspace = B,
+// The Wii Remote's other buttons on a keyboard (- / + zoom the globe, Esc or Backspace = B,
 // Home = HOME, 1 / 2), and for automated runs FORECAST_BUTTON =
 // frame:name:frames[;...] with name one of minus plus b home 1 2.
 static u32 keyboard_buttons(void) {
@@ -130,15 +254,56 @@ s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
         s->wpad_err = WPAD_ERR_NO_CONTROLLER;
         return 0;
     }
+    static bool sWatching;
+    if (!sWatching) {
+        SDL_AddEventWatch(wheel_watch, NULL);
+        sWatching = true;
+    }
+    sFrame++;
+
     f32 x, y;
     bool down, inside;
     port_pointer(&x, &y, &down, &inside);
+    int ww = 1, wh = 1;
+    SDL_GetWindowSize(port_window(), &ww, &wh);
+    if (wh <= 0) {
+        wh = 1;
+    }
+
+    // Two or more fingers: a gesture, until every finger and the button are up.
+    f32 fingers[8];
+    int nFingers = get_fingers(fingers, 4);
+    if (nFingers >= 2) {
+        track_gesture(fingers, !sGesture);
+        sGesture = true;
+        sParkUntil = 0;
+    } else if (sGesture && nFingers == 0 && !down) {
+        sGesture = false;
+        sPinchDist0 = 0.0f;
+    }
 
     bool show;
     u32 hold = 0;
-    if (down) {
+    Vec2 pos;
+    window_to_pos(x, y, &pos);
+    if (sGesture) {
+        show = false;
+        sWasDown = down;
+        sHovered = sShowAfterRelease = false;
+    } else if (down) {
         if (!sWasDown) {
             sHovered = false;
+            sTouchStart = sFrame;
+            sTouchX0 = x;
+            sTouchY0 = y;
+            sTouchMove = 0.0f;
+            sTouchWasParked = sFrame < sParkUntil;
+            sParkUntil = 0;
+        }
+        f32 mx = (x - sTouchX0) / (f32)wh, my = (y - sTouchY0) / (f32)wh;
+        f32 move = SDL_sqrtf(mx * mx + my * my);
+        if (move > sTouchMove) {
+            sTouchMove = move;
         }
         show = true;
         // First frame of a touch: pointer only; A from the next frame.
@@ -147,11 +312,38 @@ s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
         }
         sHovered = true;
         sShowAfterRelease = true;
+        sWasDown = true;
     } else {
         show = sShowAfterRelease;
         sShowAfterRelease = false;
+        if (sWasDown) {
+            // A tap shows the globe's bars; a tap in the middle while they
+            // are shown hides them; a tap on them (a button) keeps them.
+            bool tap = sFrame - sTouchStart <= TAP_FRAMES && sTouchMove <= TAP_MOVE;
+            bool onBars = pos.y <= -BAR_EDGE || pos.y > BAR_EDGE;
+            if (tap && (onBars || !sTouchWasParked)) {
+                sParkUntil = sFrame + 1 + PARK_FRAMES;
+            }
+        }
+        sWasDown = false;
     }
-    sWasDown = down;
+
+    // Wheel notches and gesture steps as one-frame presses.
+    while (sWheel >= 1.0f) {
+        pulse(WPAD_BUTTON_PLUS);
+        sWheel -= 1.0f;
+    }
+    while (sWheel <= -1.0f) {
+        pulse(WPAD_BUTTON_MINUS);
+        sWheel += 1.0f;
+    }
+    if (sPulseCooldown > 0) {
+        sPulseCooldown--;
+    } else if (sPulseCount > 0) {
+        hold |= sPulseQueue[0];
+        SDL_memmove(sPulseQueue, sPulseQueue + 1, sizeof(sPulseQueue[0]) * (size_t)--sPulseCount);
+        sPulseCooldown = 2;
+    }
 
     hold |= keyboard_buttons();
 
@@ -159,8 +351,13 @@ s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
     s->trig = hold & ~sHold;
     s->release = sHold & ~hold;
     sHold = hold;
-    window_to_pos(x, y, &s->pos);
-    if (!show) {
+    s->pos = pos;
+    if (!show && !sGesture && sFrame < sParkUntil) {
+        // Parked: off the top-left corner, at the top edge.
+        s->pos.x = PARK_X;
+        s->pos.y = PARK_Y;
+        show = true;
+    } else if (!show) {
         // Off screen.
         s->pos.x = s->pos.y = 2.0f;
     }
