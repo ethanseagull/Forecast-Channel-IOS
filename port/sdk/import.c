@@ -97,7 +97,9 @@ static bool unpack_u8(const uint8_t* a, size_t size, const char* dir) {
 }
 
 // Looks for a content file in the places a user may put it: the data folder
-// itself, or an "import" folder in it.
+// itself, or an "import" folder in it; else in channel/ in the app's own
+// folder (the iOS bundle of a build with the user's files in it,
+// tools/pack_data.ps1).
 static bool find_app(const char* name, char* out, size_t len) {
     const char* data = port_data_dir();
     snprintf(out, len, "%s%s", data, name);
@@ -105,6 +107,14 @@ static bool find_app(const char* name, char* out, size_t len) {
         return true;
     }
     snprintf(out, len, "%simport/%s", data, name);
+    if (exists(out)) {
+        return true;
+    }
+    const char* base = SDL_GetBasePath();
+    if (base == NULL) {
+        return false;
+    }
+    snprintf(out, len, "%schannel/%s", base, name);
     return exists(out);
 }
 

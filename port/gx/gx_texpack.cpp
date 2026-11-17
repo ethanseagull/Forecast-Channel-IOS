@@ -1,7 +1,10 @@
-// Texture packs in Dolphin's format: PNG files named
+// Texture packs in Dolphin's format: PNG (or DXT1 DDS) files named
 //   tex1_<w>x<h>[_m]_<XXH64 of the texels>[_<XXH64 of the used palette>]_<format>.png
-// anywhere under <data>/textures/. A texture whose name matches is drawn from
-// the PNG (usually upscaled) instead of the decoded Wii image. The name is
+// anywhere under <data>/textures/, or under textures/ in the app's own folder
+// (an iOS build with the user's packs in it, tools/pack_data.ps1; the data
+// folder's win). DDS files (tools/texpack_compress) are BC1 already and skip
+// the PNG decoding and compressing. A texture whose name matches is drawn from
+// the file (usually upscaled) instead of the decoded Wii image. The name is
 // computed exactly as Dolphin's TextureInfo::CalculateTextureName does, so
 // packs made for Dolphin work unchanged.
 #include <stdlib.h>
@@ -114,7 +117,8 @@ SDL_EnumerationResult SDLCALL scan_dir(void* userdata, const char* dirname, cons
         return SDL_ENUM_CONTINUE;
     }
     size_t n = strlen(fname);
-    if (n < 9 || SDL_strncasecmp(fname, "tex1_", 5) != 0 || SDL_strcasecmp(fname + n - 4, ".png") != 0) {
+    if (n < 9 || SDL_strncasecmp(fname, "tex1_", 5) != 0 ||
+        (SDL_strcasecmp(fname + n - 4, ".png") != 0 && SDL_strcasecmp(fname + n - 4, ".dds") != 0)) {
         return SDL_ENUM_CONTINUE;
     }
     std::string key(fname, n - 4);
@@ -133,14 +137,24 @@ void scan(void) {
         port_log("texpack: off (FORECAST_NO_TEXPACKS)\n");
         return;
     }
-    std::string root = std::string(port_data_dir()) + "textures";
-    SDL_PathInfo info;
-    if (!SDL_GetPathInfo(root.c_str(), &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
-        port_log("texpack: no %s; using the original textures\n", root.c_str());
-        return;
+    // The data folder's packs first (they win), then the app's own.
+    std::string roots[2] = {std::string(port_data_dir()) + "textures", ""};
+    const char* base = SDL_GetBasePath();
+    if (base != NULL) {
+        roots[1] = std::string(base) + "textures";
     }
-    SDL_EnumerateDirectory(root.c_str(), scan_dir, nullptr);
-    port_log("texpack: %u replacement textures under %s\n", (unsigned)sFiles.size(), root.c_str());
+    for (const std::string& root : roots) {
+        SDL_PathInfo info;
+        if (root.empty() || !SDL_GetPathInfo(root.c_str(), &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
+            continue;
+        }
+        size_t before = sFiles.size();
+        SDL_EnumerateDirectory(root.c_str(), scan_dir, nullptr);
+        port_log("texpack: %u replacement textures under %s\n", (unsigned)(sFiles.size() - before), root.c_str());
+    }
+    if (sFiles.empty()) {
+        port_log("texpack: no texture packs; using the original textures\n");
+    }
 }
 
 } // namespace
@@ -292,6 +306,37 @@ GXPackImage* load_png(const char* path) {
     return img;
 }
 
+// A DDS file of tools/texpack_compress: DXT1 (BC1), one level.
+GXPackImage* load_dds(const char* path) {
+    size_t size = 0;
+    u8* f = (u8*)SDL_LoadFile(path, &size);
+    if (f == nullptr) {
+        port_log("texpack: cannot load %s: %s\n", path, SDL_GetError());
+        return nullptr;
+    }
+    u32 w = size >= 128 ? read32(f + 16) : 0, h = size >= 128 ? read32(f + 12) : 0;
+    size_t blocks = (size_t)(w / 4) * (h / 4) * 8;
+    if (size < 128 || read32(f) != 0x20534444 || read32(f + 4) != 124 || read32(f + 84) != 0x31545844 || w == 0 ||
+        h == 0 || (w & 3) != 0 || (h & 3) != 0 || size < 128 + blocks) {
+        port_log("texpack: %s is not a DXT1 DDS this port reads\n", path);
+        SDL_free(f);
+        return nullptr;
+    }
+    GXPackImage* img = new GXPackImage;
+    img->w = w;
+    img->h = h;
+    img->bc1 = SDL_GetAtomicInt(&sComp) != GX_TEXCOMP_NONE;
+    if (img->bc1) {
+        img->data.assign(f + 128, f + 128 + blocks);
+        SDL_AddAtomicInt(&sCompressed, 1);
+    } else {
+        img->data.resize((size_t)w * h * 4);
+        gx_bc1_decode(f + 128, w, h, img->data.data());
+    }
+    SDL_free(f);
+    return img;
+}
+
 int SDLCALL worker(void* unused) {
     (void)unused;
     port_mark_host_thread();
@@ -303,7 +348,9 @@ int SDLCALL worker(void* unused) {
         Job job = sQueue[sQueueHead++];
         SDL_UnlockMutex(sLock);
 
-        GXPackImage* img = load_png(job.path);
+        size_t n = strlen(job.path);
+        GXPackImage* img = n > 4 && SDL_strcasecmp(job.path + n - 4, ".dds") == 0 ? load_dds(job.path)
+                                                                              : load_png(job.path);
         if (img == nullptr) {
             img = new GXPackImage; // failed: w == 0
             img->w = img->h = 0;

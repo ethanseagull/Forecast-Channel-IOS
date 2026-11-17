@@ -1,7 +1,12 @@
 # Builds the iOS app on a macOS runner and uploads an unsigned .ipa (the
-# sideloading tool signs it). No Nintendo data is involved: the decomp is
-# source only, and the user's channel files are imported by the app at run time.
+# sideloading tool signs it). No Nintendo data is in the repository: the decomp
+# is source only. The user's channel files and texture packs come either from
+# the Files app at run time or, when this private repo's "data" release has
+# forecast-data.zip (tools/pack_data.ps1), from the bundle.
 name: iOS
+
+permissions:
+  contents: read
 
 on:
   push:
@@ -70,6 +75,24 @@ jobs:
         run: >
           cmake --build build-ios --config Release --
           -sdk iphoneos CODE_SIGNING_ALLOWED=NO -quiet
+
+      # The user's channel files and texture packs (tools/pack_data.ps1), kept
+      # as the asset of this private repo's "data" release, never in git: with
+      # them in the bundle the app needs no Files app. Without the asset the
+      # .ipa is the plain one (the user copies the files into Documents).
+      - name: Channel files and texture packs (private release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app=$(find build-ios -type d -name ForecastOS.app -path '*Release-iphoneos*' | head -1)
+          test -n "$app"
+          if gh release download data --repo "$GITHUB_REPOSITORY" --pattern forecast-data.zip --dir "$RUNNER_TEMP"; then
+            unzip -q "$RUNNER_TEMP/forecast-data.zip" -d "$app"
+            rm "$RUNNER_TEMP/forecast-data.zip"
+            du -sh "$app/channel" "$app/textures" 2>/dev/null || true
+          else
+            echo "::notice::No forecast-data.zip in the data release: a plain .ipa (channel files via the Files app)"
+          fi
 
       - name: Package
         run: |

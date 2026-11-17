@@ -147,8 +147,13 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
      from n on on the canvas, `FORECAST_RESIZE=frame:WxH` turns the window mid-run; dumps are the
      whole canvas.
    - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from
-     scratch), so the six channel files must be copied in again. Options: an in-app file picker
-     (UIDocumentPicker) that imports from anywhere in Files, or keeping a copy outside the app.
+     scratch). Answer (2026-11-17): the full .ipa carries the channel files and texture packs in
+     its bundle (`channel/`, `textures/`; the app reads them there when Documents has none).
+     `.	ools\pack_data.ps1 -Upload` packs HAFE_v7 and the packs (compressed by
+     `tools/texpack_compress`: BC1 .dds where the app compresses anyway; the Earth pack 142 ->
+     34 MB in the .ipa) into `forecast-data.zip`, the asset of the private repo's "data"
+     release; the iOS workflow bundles it when it is there. Never make that release or the .ipa
+     public.
    Crashes write `*** crash` + exe offsets to `boot.log`; iOS's own reports (Settings > Privacy
    & Security > Analytics Data) symbolize with the CI's binary.
 2. **Milestone 4 loose ends.** Compare with Dolphin (same WiiLink-patched
