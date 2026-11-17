@@ -108,7 +108,8 @@ static bool find_app(const char* name, char* out, size_t len) {
     return exists(out);
 }
 
-void port_import_contents(void) {
+int port_import_contents(void) {
+    int missing = 0;
     const char* data = port_data_dir();
     char content[512];
     snprintf(content, sizeof(content), "%scontent", data);
@@ -124,6 +125,7 @@ void port_import_contents(void) {
         snprintf(name, sizeof(name), "%s.app", archives[i]);
         if (!find_app(name, app, sizeof(app))) {
             port_log("import: %s missing (copy the channel's contents into %s)\n", name, data);
+            missing++;
             continue;
         }
         size_t size = 0;
@@ -133,6 +135,9 @@ void port_import_contents(void) {
         bool ok = a != NULL && unpack_u8(a, size, tmp) && SDL_RenamePath(tmp, dir);
         SDL_free(a);
         port_log("import: %s -> %s%s\n", name, dir, ok ? "" : " FAILED");
+        if (!ok) {
+            missing++;
+        }
     }
 
     char dol[512], app[512];
@@ -141,10 +146,15 @@ void port_import_contents(void) {
         if (find_app("00000001.app", app, sizeof(app))) {
             bool ok = SDL_CopyFile(app, dol);
             port_log("import: 00000001.app (DOL)%s\n", ok ? "" : " FAILED");
+            if (!ok) {
+                missing++;
+            }
         } else {
             port_log("import: 00000001.app missing (copy the channel's contents into %s)\n", data);
+            missing++;
         }
     }
+    return missing;
 }
 
 // --- the DOL -------------------------------------------------------------------------

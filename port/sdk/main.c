@@ -7,6 +7,9 @@
 #include <port_log.h>
 #include <port_mem.h>
 #include <port_import.h>
+#ifdef SDL_PLATFORM_IOS
+#include <port_ios.h>
+#endif
 #include <port_paths.h>
 #include <port_platform.h>
 
@@ -63,11 +66,33 @@ int main(int argc, char** argv) {
     port_log_open();
     port_log("ForecastOS: Forecast Channel host port (%s, %d-bit)\n", SDL_GetPlatform(), (int)sizeof(void*) * 8);
     port_log("data: %s\n", port_data_dir());
-    port_import_contents();
-    port_load_dol_data();
     if (!port_platform_init()) {
         return 1;
     }
+    // The user's channel files (port/sdk/import.c).
+    if (port_import_contents() != 0) {
+#ifdef SDL_PLATFORM_IOS
+        // Ask for the folder that holds them (port/ios/import_ios.m).
+        bool ok = port_ios_get_channel_files() && port_import_contents() == 0;
+#else
+        bool ok = false;
+#endif
+        if (!ok) {
+            char msg[1400];
+            SDL_snprintf(msg, sizeof(msg),
+                         "The Forecast Channel's files are missing. Copy 00000001.app and 00000006.app "
+                         "to 0000000a.app (the HAFE v7 contents) into\n%s\nand start again.",
+                         port_data_dir());
+            port_log("%s\n", msg);
+            const char* hidden = SDL_getenv("FORECAST_HIDDEN");
+            if (hidden == NULL || hidden[0] != '1') {
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Forecast Channel files needed", msg, port_window());
+            }
+            port_platform_quit();
+            return 1;
+        }
+    }
+    port_load_dol_data();
     channel_main();
     port_platform_quit();
     return 0;

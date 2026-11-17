@@ -504,7 +504,16 @@ static void fill_tev(GXTevUniforms* u, u32* usedMaps) {
     u->pad = 0;
 }
 
+// Adds the time from construction to destruction to a port_perf_add bucket.
+struct PerfScope {
+    int bucket;
+    Uint64 start;
+    explicit PerfScope(int b) : bucket(b), start(SDL_GetTicksNS()) {}
+    ~PerfScope() { port_perf_add(bucket, SDL_GetTicksNS() - start); }
+};
+
 void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
+    PerfScope perf(PORT_PERF_RECORD);
     if (gx_bits(gx.bp[0x00], 14, 2) == 3) {
         return; // cull all
     }
@@ -783,10 +792,17 @@ static void render(SDL_GPUCommandBuffer* cb) {
     SDL_EndGPURenderPass(rp);
 }
 
+static Uint64 sAcquireNS; // this frame's wait for the window's image
+
 static void present(SDL_GPUCommandBuffer* cb) {
     SDL_GPUTexture* sw = NULL;
     Uint32 sw_w = 0, sw_h = 0;
-    if (!SDL_WaitAndAcquireGPUSwapchainTexture(cb, port_window(), &sw, &sw_w, &sw_h) || sw == NULL) {
+    Uint64 waitStart = SDL_GetTicksNS();
+    bool ok = SDL_WaitAndAcquireGPUSwapchainTexture(cb, port_window(), &sw, &sw_w, &sw_h);
+    Uint64 waited = SDL_GetTicksNS() - waitStart;
+    port_perf_add(PORT_PERF_ACQUIRE, waited);
+    sAcquireNS += waited;
+    if (!ok || sw == NULL) {
         return; // minimized
     }
     // Clear to black, then scale the EFB into the largest 16:9 rectangle.
@@ -872,6 +888,13 @@ static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
 }
 
 extern "C" void port_gx_present(void) {
+    // Submit time, without the wait for the window's image (reported apart).
+    Uint64 submitStart = SDL_GetTicksNS();
+    sAcquireNS = 0;
+    struct SubmitTimer {
+        Uint64 start;
+        ~SubmitTimer() { port_perf_add(PORT_PERF_SUBMIT, SDL_GetTicksNS() - start - sAcquireNS); }
+    } submitTimer{submitStart};
     flush();
     SDL_GPUCommandBuffer* cb = get_cmd();
     if (cb != NULL) {

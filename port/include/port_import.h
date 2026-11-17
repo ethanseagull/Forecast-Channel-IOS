@@ -9,7 +9,8 @@ extern "C" {
 
 // Unpacks the channel's archives (and copies the DOL) dropped into the data
 // folder into <data>/content, where they are not already.
-void port_import_contents(void);
+// Returns how many of the six files are still missing.
+int port_import_contents(void);
 
 // Copies size bytes at Wii address addr out of the DOL.
 bool port_dol_read(uint32_t addr, void* dst, uint32_t size);

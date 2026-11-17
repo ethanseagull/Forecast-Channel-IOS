@@ -164,6 +164,18 @@ if(APPLE)
 endif()
 
 if(IOS)
+    # Native iOS pieces (the folder picker that imports the channel files),
+    # in Objective-C with ARC and kept apart from the port's compatibility
+    # flags, which do not mix with UIKit's headers.
+    enable_language(OBJC)
+    add_library(forecast_ios STATIC ${PORT_DIR}/ios/import_ios.m)
+    target_include_directories(forecast_ios PRIVATE ${PORT_DIR}/include)
+    target_compile_options(forecast_ios PRIVATE -fobjc-arc)
+    target_link_libraries(forecast_ios PRIVATE ${FORECAST_SDL_LIB}
+        "-framework UIKit" "-framework Foundation" "-framework UniformTypeIdentifiers")
+    target_link_libraries(forecast PRIVATE forecast_ios)
+endif()
+if(IOS)
     # An app bundle the user sideloads: unsigned here (the sideloading tool
     # signs it). The channel's files go into its Documents folder through the
     # Files app (Info.plist: UIFileSharingEnabled).
