@@ -106,10 +106,17 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 
 ## Open work, in priority order
 
-1. **iOS build in CI** (milestone 6): make the workflow green, then sideload
-   the .ipa and test on the iPhone: import (copy 00000001.app and
-   00000006-0000000a.app into the app's folder in Files), ASTC textures, audio,
-   touch, memory. Decide what "Back to the Wii Menu" does on iOS (quits now).
+1. **iOS: works on the user's iPhone 15 Pro (iOS 26.3.1), 2026-11-16.** Their feedback:
+   - A bit laggy. Get `boot.log` from the app's Files folder: it prints fps and busy % every
+     600 frames. Suspects: the 3x EFB (1920x1368), the TEV ubershader's per-pixel loops on a
+     tile GPU, CPU vertex transform, the per-frame texture re-hash.
+   - Does not fill the screen: the 16:9 frame is letterboxed on the 19.5:9 display (milestone 7).
+   - No pinch to zoom the globe (milestone 7; the Remote's -/+ have no touch equivalent yet).
+   - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from
+     scratch), so the six channel files must be copied in again. Options: an in-app file picker
+     (UIDocumentPicker) that imports from anywhere in Files, or keeping a copy outside the app.
+   Crashes write `*** crash` + exe offsets to `boot.log`; iOS's own reports (Settings > Privacy
+   & Security > Analytics Data) symbolize with the CI's binary.
 2. **Milestone 4 loose ends.** Compare with Dolphin (same WiiLink-patched
    channel): the globe's water and relief shading (indirect texturing and
    environment texgens, judged by eye only), and the left part of the forecast
