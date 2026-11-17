@@ -271,16 +271,22 @@ static void queue_upload(SDL_GPUTexture* tex, const u8* rgba, u32 w, u32 h) {
     sUploads.push_back(u);
 }
 
-static SDL_GPUTexture* get_texture(const GXTexDesc& d) {
+// The GPU copy of the texture in map `map` (described by d), uploading the
+// version the GPU lacks.
+static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
     BackendTex& t = sTextures[d.key];
     if (t.tex == NULL || t.version != d.version) {
+        const u8* px = gx_tex_pixels(map);
+        if (px == NULL) {
+            return NULL;
+        }
         if (t.tex != NULL) {
             sRetired.push_back(t.tex);
         }
         t.tex = create_texture(d.width, d.height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         t.version = d.version;
         if (t.tex != NULL) {
-            queue_upload(t.tex, d.rgba, d.width, d.height);
+            queue_upload(t.tex, px, d.width, d.height);
         } else {
             port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)d.width, (unsigned long)d.height,
                      SDL_GetError());
@@ -319,6 +325,26 @@ static void fill_tev(GXTevUniforms* u, u32* usedMaps) {
         if ((order >> 6) & 1) {
             *usedMaps |= 1u << (order & 7);
         }
+    }
+    // Indirect texturing: the indirect stages' maps (BP 0x27, 6 bits a
+    // stage, map in the low 3) are sampled too.
+    u32 indStages = gx_bits(gx.bp[0x00], 16, 3);
+    for (u32 s = 0; s < indStages && s < 4; s++) {
+        *usedMaps |= 1u << gx_bits(gx.bp[0x27], s * 6, 3);
+    }
+    for (int i = 0; i < 16; i++) {
+        u->tevInd[i] = gx.bp[0x10 + i];
+    }
+    for (int i = 0; i < 12; i++) {
+        u->indMtx[i] = i < 9 ? gx.bp[0x06 + i] : 0;
+    }
+    u->indScale[0] = gx.bp[0x25];
+    u->indScale[1] = gx.bp[0x26];
+    u->indRef = gx.bp[0x27];
+    u->pad2 = 0;
+    for (int n = 0; n < 8; n++) {
+        u->tcScale[n] = gx_bits(gx.bp[0x30 + 2 * n], 0, 16) | gx_bits(gx.bp[0x31 + 2 * n], 0, 16) << 16;
+        u->texImage0[n] = gx_bits(gx.bp[n < 4 ? 0x88 + n : 0xA8 + (n - 4)], 0, 20);
     }
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
@@ -368,7 +394,7 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
             }
         }
         if ((used & (1u << m)) && gx_tex_get(m, &td)) {
-            SDL_GPUTexture* t = get_texture(td);
+            SDL_GPUTexture* t = get_texture(m, td);
             if (t != NULL) {
                 d.tex[m].texture = t;
                 d.tex[m].sampler = get_sampler(td);
@@ -398,9 +424,6 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     d.scissor.w = right > left ? right - left : 0;
     d.scissor.h = bottom > top ? bottom - top : 0;
 
-    if (gx_bits(gx.bp[0x00], 16, 3) != 0) {
-        WARN_ONCE("gx: indirect texturing not supported\n");
-    }
     if (gx_bits(gx.bp[0xF1], 21, 3) != 0) {
         WARN_ONCE("gx: fog not supported yet\n");
     }
@@ -418,9 +441,15 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
                  (unsigned)(gx.xfReg[0x09] & 3), (unsigned)(gx.xfReg[0x3F] & 15), v0.clr[0][0], v0.clr[0][1],
                  v0.clr[0][2], v0.clr[0][3], v0.pos[0], v0.pos[1], v0.pos[2], v0.pos[3]);
         for (u32 s = 0; s <= gx_bits(gx.bp[0x00], 10, 4); s++) {
-            port_log("    stage %u: order %03x color %06x alpha %06x ksel %06x\n", (unsigned)s,
+            port_log("    stage %u: order %03x color %06x alpha %06x ksel %06x ind %06x\n", (unsigned)s,
                      (unsigned)gx_bits(d.tev.tevOrder[s / 2], (s & 1) * 12, 12), (unsigned)d.tev.colorEnv[s],
-                     (unsigned)d.tev.alphaEnv[s], (unsigned)d.tev.ksel[s / 2]);
+                     (unsigned)d.tev.alphaEnv[s], (unsigned)d.tev.ksel[s / 2], (unsigned)d.tev.tevInd[s]);
+        }
+        if (gx_bits(gx.bp[0x00], 16, 3) != 0) {
+            port_log("    ind stages %u: ref %06x scale %06x %06x mtx0 %06x %06x %06x\n",
+                     (unsigned)gx_bits(gx.bp[0x00], 16, 3), (unsigned)d.tev.indRef, (unsigned)d.tev.indScale[0],
+                     (unsigned)d.tev.indScale[1], (unsigned)d.tev.indMtx[0], (unsigned)d.tev.indMtx[1],
+                     (unsigned)d.tev.indMtx[2]);
         }
         port_log("    regs prev %d %d %d %d c0 %d %d %d %d c1 %d %d %d %d k0 %d %d %d %d k1 %d %d %d %d "
                  "chan0 ctrl %06x/%06x mat %08x amb %08x\n",

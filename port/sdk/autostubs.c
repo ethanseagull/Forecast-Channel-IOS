@@ -450,11 +450,6 @@ long long port_stub_120(void) {
     port_stub_hit("OSRestart");
     return 0;
 }
-long long port_stub_121(void) __asm__("OSReturnToMenu");
-long long port_stub_121(void) {
-    port_stub_hit("OSReturnToMenu");
-    return 0;
-}
 long long port_stub_122(void) __asm__("OSSetPowerCallback");
 long long port_stub_122(void) {
     port_stub_hit("OSSetPowerCallback");

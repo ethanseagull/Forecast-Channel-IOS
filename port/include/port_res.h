@@ -65,6 +65,15 @@ void SwapAnimationToNative(const void* file);
 } // namespace nw4r
 
 namespace nw4r {
+namespace g3d {
+namespace port {
+// BRRES (MDL0, TEX0, PLT0): called by SimpleModel before it builds the ResFile.
+void SwapResFileToNative(void* file);
+} // namespace port
+} // namespace g3d
+} // namespace nw4r
+
+namespace nw4r {
 namespace ut {
 namespace port {
 // RFNT / RFNA: called by ResFont::SetResource and the ArchiveFont entry points.

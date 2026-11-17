@@ -36,6 +36,15 @@ bool port_platform_init(void) {
     return true;
 }
 
+// "Back to the Wii Menu": on the Wii this never returns. On Windows the app
+// quits. (iOS apps must not quit themselves; milestone 6 decides what it
+// does there.)
+void OSReturnToMenu(void) {
+    port_log("OSReturnToMenu: quitting after %u frames\n", sFrame);
+    port_platform_quit();
+    exit(0);
+}
+
 void port_platform_quit(void) {
     SDL_DestroyWindow(sWindow);
     SDL_Quit();
@@ -99,7 +108,13 @@ uint32_t port_platform_frame(void) {
         }
     }
 
+    // Time since the last frame started is work; the rest is waiting for
+    // the next 60 Hz tick.
+    static Uint64 sFrameStartNS, sLogNS, sBusyNS;
     Uint64 now = SDL_GetTicksNS();
+    if (sFrameStartNS != 0) {
+        sBusyNS += now - sFrameStartNS;
+    }
     if (now < sNextFrameNS) {
         SDL_DelayPrecise(sNextFrameNS - now);
         sNextFrameNS += FRAME_NS;
@@ -108,8 +123,15 @@ uint32_t port_platform_frame(void) {
         sNextFrameNS = now + FRAME_NS;
     }
     sFrame++;
+    now = SDL_GetTicksNS();
+    sFrameStartNS = now;
+    // Every 600 frames: the frame rate and the share of time spent working.
     if (sFrame == 1 || sFrame % 600 == 0) {
-        port_log("frame %u\n", sFrame);
+        double secs = sLogNS != 0 ? (double)(now - sLogNS) / 1e9 : 0.0;
+        port_log("frame %u: %.1f fps, busy %.0f%%\n", sFrame, secs > 0.0 ? 600.0 / secs : 0.0,
+                 secs > 0.0 ? 100.0 * (double)sBusyNS / 1e9 / secs : 0.0);
+        sLogNS = now;
+        sBusyNS = 0;
     }
     return sFrame;
 }

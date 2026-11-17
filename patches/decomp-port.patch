@@ -239,6 +239,64 @@ index c19e16a..741a896 100644
  }
  
  /******************************************************************************
+diff --git a/include/nw4r/g3d/platform/g3d_gpu.h b/include/nw4r/g3d/platform/g3d_gpu.h
+index 9a635c6..902c6df 100644
+--- a/include/nw4r/g3d/platform/g3d_gpu.h
++++ b/include/nw4r/g3d/platform/g3d_gpu.h
+@@ -95,6 +95,17 @@ inline void GDSetChanCtrlLightOff(GXChannelID chan, u32 param, u32 lightMask) {
+     LoadXFCmd(GX_XF_REG_COLOR0CNTRL + (chan & 3), param);
+ }
+ 
++#ifdef FORECAST_PORT
++// The register wants R in the top byte; reading the GXColor as a u32 only
++// gives that on a big-endian CPU.
++inline void GDSetChanAmbColor(GXChannelID chan, GXColor color) {
++    LoadXFCmd(GX_XF_REG_AMBIENT0 + chan, GX_COLOR_AS_U32(color));
++}
++
++inline void GDSetChanMatColor(GXChannelID chan, GXColor color) {
++    LoadXFCmd(GX_XF_REG_MATERIAL0 + chan, GX_COLOR_AS_U32(color));
++}
++#else
+ inline void GDSetChanAmbColor(GXChannelID chan, GXColor color) {
+     LoadXFCmd(GX_XF_REG_AMBIENT0 + chan, *reinterpret_cast<u32*>(&color));
+ }
+@@ -102,6 +113,7 @@ inline void GDSetChanAmbColor(GXChannelID chan, GXColor color) {
+ inline void GDSetChanMatColor(GXChannelID chan, GXColor color) {
+     LoadXFCmd(GX_XF_REG_MATERIAL0 + chan, *reinterpret_cast<u32*>(&color));
+ }
++#endif
+ 
+ } // namespace fifo
+ } // namespace g3d
+diff --git a/include/nw4r/g3d/res/g3d_resmat.h b/include/nw4r/g3d/res/g3d_resmat.h
+index c66f7bc..40ca830 100644
+--- a/include/nw4r/g3d/res/g3d_resmat.h
++++ b/include/nw4r/g3d/res/g3d_resmat.h
+@@ -453,8 +453,10 @@ public:
+ struct ResTexPlttInfoData {
+     s32 nameTex;            // at 0x0
+     s32 namePltt;           // at 0x4
+-    ResTexData* pTexData;   // at 0x8
+-    ResPlttData* pPlttData; // at 0xC
++    // Set at bind time; only tested against NULL. PTR32: 4-byte slots on the
++    // port (GX addresses), plain pointers on the Wii.
++    PTR32(ResTexData) pTexData;   // at 0x8
++    PTR32(ResPlttData) pPlttData; // at 0xC
+     GXTexMapID mapID;       // at 0x10
+     GXTlut tlutID;          // at 0x14
+     GXTexWrapMode wrap_s;   // at 0x18
+@@ -468,6 +470,10 @@ struct ResTexPlttInfoData {
+     u8 PADDING_0x32;        // at 0x32
+     u8 PADDING_0x33;        // at 0x33
+ };
++#ifdef FORECAST_PORT
++// Overlays MDL0 data: materials hold arrays of it.
++static_assert(sizeof(ResTexPlttInfoData) == 0x34, "ResTexPlttInfoData must match MDL0");
++#endif
+ 
+ class ResTexPlttInfo : public ResCommon<ResTexPlttInfoData> {
+ public:
 diff --git a/include/nw4r/lyt/lyt_common.h b/include/nw4r/lyt/lyt_common.h
 index 4f3a828..df73465 100644
 --- a/include/nw4r/lyt/lyt_common.h
@@ -1626,54 +1684,8 @@ index c8a3452..8161592 100644
      case -1:
          break;
      default:
-diff --git a/src/SimpleGlobe.cpp b/src/SimpleGlobe.cpp
-index 269849e..f5f1132 100644
---- a/src/SimpleGlobe.cpp
-+++ b/src/SimpleGlobe.cpp
-@@ -18,6 +18,14 @@
- #include "nw4r/g3d/res/g3d_resmdl.h"
- #include "nw4r/g3d/res/g3d_resmat.h"
- 
-+// The port cannot read earth.brres yet (milestone 4): SimpleModel then has no
-+// scene model, and the globe is skipped (see SimpleModel.cpp).
-+#ifdef FORECAST_PORT
-+#define PORT_HAS_EARTH_MDL && gEarthModel->mScnMdl != NULL
-+#else
-+#define PORT_HAS_EARTH_MDL
-+#endif
-+
- // Camera distance from the globe per zoom level
- const f32 sZoomDistances[10] = {
-     1.0f, 2.0f, 5.0f, 8.0f, 12.0f,
-@@ -111,7 +119,7 @@ void SimpleGlobe::SetRotation(const Vec* rotation, s32 frames) {
-         }
-     }
- 
--    if (gEarthModel != 0) {
-+    if (gEarthModel != 0 PORT_HAS_EARTH_MDL) {
-         gEarthModel->Calc();
-         this->mScnRoot->Insert(this->mScnRoot->Size(), (nw4r::g3d::ScnObj *)gEarthModel->mScnMdl);
-     }
-@@ -219,7 +227,7 @@ void SimpleGlobe::ClearInput() {
-         }
-     }
- 
--    if (gEarthModel != NULL) {
-+    if (gEarthModel != NULL PORT_HAS_EARTH_MDL) {
-         gEarthModel->Calc();
-         mScnRoot->Insert(mScnRoot->Size(), (nw4r::g3d::ScnObj*)gEarthModel->mScnMdl);
-     }
-@@ -770,7 +778,7 @@ void SimpleGlobe::UpdateWater() {
-     posture.cameraTarget.z = target.z;
-     camera.SetPosture(posture);
- 
--    if (gEarthModel != NULL) {
-+    if (gEarthModel != NULL PORT_HAS_EARTH_MDL) {
-         nw4r::g3d::ResMdl mdl = gEarthModel->mResMdl;
-         u32 count = mdl.GetResMatNumEntries();
-         u32 luminous = mdl.GetResMat("luminous_mat").GetID();
 diff --git a/src/SimpleModel.cpp b/src/SimpleModel.cpp
-index 4b30a36..2153106 100644
+index 4b30a36..b960602 100644
 --- a/src/SimpleModel.cpp
 +++ b/src/SimpleModel.cpp
 @@ -6,6 +6,9 @@
@@ -1681,49 +1693,22 @@ index 4b30a36..2153106 100644
  #include <nw4r/g3d/g3d_scnmdlsmpl.h>
  #include <nw4r/math.h>
 +#ifdef FORECAST_PORT
-+#include <port_log.h>
++#include <port_res.h>
 +#endif
  
  // 3.0f, read from other units (SimpleGlobe ctor, fn_8002B9B0) and negated there
  extern const f32 gModelRange = 3.0f;
-@@ -24,10 +27,25 @@ SimpleModel::SimpleModel(void* resData) : mTrans(0.0f, 0.0f, 0.0f), mRot(0.0f, 0
+@@ -21,6 +24,10 @@ SimpleModel::SimpleModel(void* resData) : mTrans(0.0f, 0.0f, 0.0f), mRot(0.0f, 0
+     nw4r::g3d::ResFile file(resData);
+     u32 size;
+ 
++#ifdef FORECAST_PORT
++    // earth.brres is big-endian; g3d reads it in place.
++    nw4r::g3d::port::SwapResFileToNative(resData);
++#endif
      file.Init();
      file.Bind();
      mResMdl = file.GetResMdl(0);
-+#ifdef FORECAST_PORT
-+    // earth.brres is big-endian and the port cannot read it yet (milestone
-+    // 4): without a model the globe is simply not drawn, and the 2D screens
-+    // work around it.
-+    if (!mResMdl.IsValid()) {
-+        port_log("globe: earth.brres not readable on the port yet; no globe\n");
-+        mScnMdl = NULL;
-+        return;
-+    }
-+#endif
-     mScnMdl = nw4r::g3d::ScnMdlSimple::Construct(&gMEM2Allocator32, &size, mResMdl, 1);
- }
- 
- SimpleModel::~SimpleModel() {
-+#ifdef FORECAST_PORT
-+    if (mScnMdl == NULL) {
-+        return;
-+    }
-+#endif
-     mScnMdl->Destroy();
- }
- 
-@@ -36,6 +54,11 @@ void SimpleModel::Calc() {}
- 
- void SimpleModel::UpdateMtx() {
-     mMtx = CalcMtx(mRot);
-+#ifdef FORECAST_PORT
-+    if (mScnMdl == NULL) {
-+        return;
-+    }
-+#endif
-     mScnMdl->SetMtx(nw4r::g3d::ScnObj::MTX_LOCAL, &mMtx);
- }
- 
 diff --git a/src/Sound.cpp b/src/Sound.cpp
 index 2e98f66..d4563c2 100644
 --- a/src/Sound.cpp
@@ -1871,7 +1856,7 @@ index 612909c..4cc4877 100644
  }
  
 diff --git a/src/System.cpp b/src/System.cpp
-index 8a3b2b2..304c60b 100644
+index 8a3b2b2..b70968f 100644
 --- a/src/System.cpp
 +++ b/src/System.cpp
 @@ -62,9 +62,9 @@ void SystemInit(void) {
@@ -1929,7 +1914,7 @@ index 8a3b2b2..304c60b 100644
      GXEnd();
  }
  
-@@ -1242,6 +1251,53 @@ void MEM2Free(void* block) {
+@@ -1242,6 +1251,71 @@ void MEM2Free(void* block) {
      MEMFreeToExpHeap(gMEM2Heap, block);
  }
  
@@ -1942,11 +1927,29 @@ index 8a3b2b2..304c60b 100644
 +
 +#include <port_mem.h>
 +
++// Blocks of 1 MB and more are host buffers (the GX layer's decoded textures
++// and upload staging: the globe's 1024x1024 tiles are 4 MB each as RGBA);
++// the channel's own large buffers come from its MEM heaps directly. They go
++// to the C heap so they cannot exhaust MEM1, and so does anything MEM1 cannot
++// serve. Nothing from operator new is handed to GX by address.
++#define PORT_NEW_HOST_MIN (1024u * 1024)
++
 +static void* PortNew(size_t size, s32 align) {
-+    if (gMEM1Heap == NULL) {
++    // malloc aligns to 16; larger alignments (the channel's new (-32)) stay in MEM1.
++    if (gMEM1Heap == NULL || (size >= PORT_NEW_HOST_MIN && align >= -16 && align <= 16)) {
 +        return malloc(size != 0 ? size : 1);
 +    }
-+    return MEMAllocFromExpHeapEx(gMEM1Heap, size, align < 16 ? 16 : align);
++    void* p = MEMAllocFromExpHeapEx(gMEM1Heap, size, align < 16 ? 16 : align);
++    if (p == NULL) {
++        static bool sWarned;
++        if (!sWarned) {
++            sWarned = true;
++            OSReport("port: MEM1 full (%lu bytes asked, %u free); operator new falls back to the C heap\n",
++                     (unsigned long)size, MEMGetTotalFreeSizeForExpHeap(gMEM1Heap));
++        }
++        p = malloc(size != 0 ? size : 1);
++    }
++    return p;
 +}
 +
 +static void PortDelete(void* block) {
@@ -1983,7 +1986,7 @@ index 8a3b2b2..304c60b 100644
  void* operator new(size_t size) {
      return MEMAllocFromExpHeapEx(gMEM1Heap, size, 4);
  }
-@@ -1261,6 +1317,7 @@ void operator delete(void* block) {
+@@ -1261,6 +1335,7 @@ void operator delete(void* block) {
  void operator delete[](void* block) {
      MEMFreeToExpHeap(gMEM1Heap, block);
  }
@@ -3298,6 +3301,31 @@ index 618200c..d3effe1 100644
  
      pContext->Align(32);
      pContext->pFINF->pGlyph->sheetImage = pContext->pCurrent;
+diff --git a/src/nw4r/ut/ut_LockedCache.cpp b/src/nw4r/ut/ut_LockedCache.cpp
+index 7a0970f..7ae33df 100644
+--- a/src/nw4r/ut/ut_LockedCache.cpp
++++ b/src/nw4r/ut/ut_LockedCache.cpp
+@@ -44,6 +44,12 @@ public:
+     }
+ 
+     bool Lock() {
++#ifdef FORECAST_PORT
++        // There is no locked cache: LC::GetBase() is a Wii address and the
++        // LC DMA calls are stubs. Callers (g3d) then take their main-memory
++        // paths.
++        return false;
++#else
+         OSLockMutex(&mMutex);
+ 
+         if (mIsEnabled) {
+@@ -53,6 +59,7 @@ public:
+ 
+         OSUnlockMutex(&mMutex);
+         return false;
++#endif
+     }
+ 
+     void Unlock() {
 diff --git a/src/nw4r/ut/ut_ResFont.cpp b/src/nw4r/ut/ut_ResFont.cpp
 index 64d4150..780dd08 100644
 --- a/src/nw4r/ut/ut_ResFont.cpp

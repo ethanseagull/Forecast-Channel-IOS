@@ -241,12 +241,15 @@ bool gx_tex_decode(u32 fmt, const u8* src, u32 w, u32 h, const u8* tlut, u32 tlu
 
 namespace {
 
+// What the cache keeps per image: no pixels. The renderer uploads each
+// version once and asks for the decoded pixels (gx_tex_pixels) only then.
 struct TexEntry {
-    std::vector<u8> rgba;
-    u64 hash = 0;
-    u32 epoch = 0; // sEpoch when last hashed (or decoded)
+    u64 hash = 0;      // of the texel (and palette) bytes
+    u64 sample = 0;    // of a sparse sample of them (large images)
+    u32 epoch = 0;     // sEpoch when last checked
+    u32 fullFrame = 0; // sFrame of the last full hash
     u32 lastFrame = 0;
-    u32 version = 0; // 0: not decoded yet
+    u32 version = 0; // 0: new
     u32 w = 0, h = 0;
 };
 
@@ -258,9 +261,16 @@ u32 sVersion;
 // Since the last statistics line.
 u32 sDecoded, sHashed;
 u64 sDecodedBytes, sHashedBytes;
+std::vector<u8> sPixels;
 
 const u32 kTmemHiSize = 0x80000;
 const u32 kEvictFrames = 600;
+// The channel invalidates every texture every frame. Images above this size
+// get a sparse sample hash each time and a full hash only every
+// kFullHashFrames frames (or when the sample changes): the globe's 512 KB
+// tiles would otherwise cost about 17 MB of hashing a frame.
+const u32 kSampleAbove = 64 * 1024;
+const u32 kFullHashFrames = 30;
 
 u32 next_version() {
     if (++sVersion == 0) {
@@ -275,8 +285,7 @@ inline u64 mix(u64 h, u64 v) {
     return h ^ (h >> 29);
 }
 
-// A 64-bit hash, four independent lanes so it runs near memory speed (every
-// image in use is re-hashed once a frame).
+// A 64-bit hash, four independent lanes so it runs near memory speed.
 u64 hash_bytes(const u8* p, size_t n, u64 seed) {
     u64 a = seed, b = seed ^ 0x243F6A8885A308D3ull, c = seed ^ 0x13198A2E03707344ull, d = seed ^ 0xA4093822299F31D0ull;
     size_t i = 0;
@@ -295,6 +304,108 @@ u64 hash_bytes(const u8* p, size_t n, u64 seed) {
     return mix(h, n);
 }
 
+// 64 chunks of 64 bytes spread over the image, plus its first and last 64.
+u64 sample_bytes(const u8* p, size_t n, u64 seed) {
+    u64 h = seed;
+    const size_t chunk = 64, count = 64;
+    size_t step = (n - chunk) / (count - 1);
+    for (size_t i = 0; i < count; i++) {
+        h = hash_bytes(p + i * step, chunk, h);
+    }
+    return hash_bytes(p + n - chunk, chunk, h);
+}
+
+// A texture map's registers, resolved to memory.
+struct MapInfo {
+    u32 mode0;
+    u32 fmt, w, h, size;
+    const u8* src;
+    const u8* pal;
+    u32 entries, tlutFmt;
+    u64 key;
+};
+
+bool resolve(int map, MapInfo* m) {
+    if (map < 0 || map > 7) {
+        return false;
+    }
+    // Maps 0-3: BP 0x80-0x9B, maps 4-7: BP 0xA0-0xBB (mode0, mode1, image0-3,
+    // TLUT, 4 registers apart).
+    u32 b = map < 4 ? 0x80 + map : 0xA0 + (map - 4);
+    u32 mode1 = gx.bp[b + 0x04], image0 = gx.bp[b + 0x08], image3 = gx.bp[b + 0x14], tlut = gx.bp[b + 0x18];
+    m->mode0 = gx.bp[b];
+    m->w = gx_bits(image0, 0, 10) + 1;
+    m->h = gx_bits(image0, 10, 10) + 1;
+    m->fmt = gx_bits(image0, 20, 4);
+    u32 addr = gx_bits(image3, 0, 24);
+    if (addr == 0) {
+        return false;
+    }
+    m->size = gx_tex_data_size(m->fmt, m->w, m->h);
+    if (m->size == 0) {
+        WARN_ONCE("gx: texture map %d has unsupported format %u\n", map, m->fmt);
+        return false;
+    }
+    m->src = gx_mem(addr << 5);
+    if (!gx_addr_ok(m->src, m->size)) {
+        static int sBad;
+        if (sBad++ < 8) {
+            port_log("gx: texture map %d at GX address %08x (%ux%u fmt %u) unmapped\n", map, addr << 5, m->w, m->h,
+                     m->fmt);
+        }
+        return false;
+    }
+    if (gx_bits(mode1, 8, 8) != 0) {
+        WARN_ONCE("gx: texture with mipmaps (%ux%u fmt %u, max LOD %u/16); only level 0 is used\n", m->w, m->h,
+                  m->fmt, gx_bits(mode1, 8, 8));
+    }
+
+    // Address (24 bits), format (4), size (10 + 10), and for CI formats the
+    // TLUT register (TMEM offset 10, format 2).
+    m->key = (u64)addr | (u64)m->fmt << 24 | (u64)(m->w - 1) << 28 | (u64)(m->h - 1) << 38;
+    m->entries = gx_tex_tlut_entries(m->fmt);
+    m->pal = nullptr;
+    m->tlutFmt = 0;
+    if (m->entries != 0) {
+        if (gx.tmemHi == nullptr) {
+            return false;
+        }
+        u32 off = gx_bits(tlut, 0, 10) << 9;
+        u32 bytes = m->entries * 2;
+        m->tlutFmt = gx_bits(tlut, 10, 2);
+        m->pal = gx.tmemHi + off;
+        if (off + bytes > kTmemHiSize) {
+            // A CI14 palette running past the end of TMEM: pad with zeros
+            // rather than read beyond it.
+            static u8 sPadded[16384 * 2];
+            memset(sPadded, 0, sizeof(sPadded));
+            memcpy(sPadded, m->pal, kTmemHiSize - off);
+            m->pal = sPadded;
+            WARN_ONCE("gx: TLUT at TMEM %05x runs past the end of TMEM\n", off);
+        }
+        m->key |= (u64)gx_bits(tlut, 0, 12) << 48;
+    }
+    return true;
+}
+
+u64 full_hash(const MapInfo& m) {
+    u64 hash = hash_bytes(m.src, m.size, 0x6A09E667F3BCC908ull);
+    if (m.pal != nullptr) {
+        hash = hash_bytes(m.pal, m.entries * 2, hash);
+    }
+    sHashed++;
+    sHashedBytes += m.size;
+    return hash;
+}
+
+u64 sample_hash(const MapInfo& m) {
+    u64 hash = sample_bytes(m.src, m.size, 0xBB67AE8584CAA73Bull);
+    if (m.pal != nullptr) {
+        hash = hash_bytes(m.pal, m.entries * 2, hash);
+    }
+    return hash;
+}
+
 } // namespace
 
 void gx_tex_invalidate(void) {
@@ -302,106 +413,68 @@ void gx_tex_invalidate(void) {
 }
 
 bool gx_tex_get(int map, GXTexDesc* out) {
-    if (map < 0 || map > 7) {
+    MapInfo m;
+    if (!resolve(map, &m)) {
         return false;
     }
-    // Maps 0-3: BP 0x80-0x9B, maps 4-7: BP 0xA0-0xBB (mode0, mode1, image0-3,
-    // TLUT, 4 registers apart).
-    u32 b = map < 4 ? 0x80 + map : 0xA0 + (map - 4);
-    u32 mode0 = gx.bp[b], mode1 = gx.bp[b + 0x04], image0 = gx.bp[b + 0x08], image3 = gx.bp[b + 0x14],
-        tlut = gx.bp[b + 0x18];
-    u32 w = gx_bits(image0, 0, 10) + 1, h = gx_bits(image0, 10, 10) + 1;
-    u32 fmt = gx_bits(image0, 20, 4);
-    u32 addr = gx_bits(image3, 0, 24);
-    if (addr == 0) {
-        return false;
-    }
-    u32 size = gx_tex_data_size(fmt, w, h);
-    if (size == 0) {
-        WARN_ONCE("gx: texture map %d has unsupported format %u\n", map, fmt);
-        return false;
-    }
-    const u8* src = gx_mem(addr << 5);
-    if (!gx_addr_ok(src, size)) {
-        static int sBad;
-        if (sBad++ < 8) {
-            port_log("gx: texture map %d at GX address %08x (%ux%u fmt %u) unmapped\n", map, addr << 5, w, h, fmt);
+    TexEntry& e = sCache[m.key];
+    bool big = m.size > kSampleAbove;
+    if (e.version == 0) {
+        e.hash = full_hash(m);
+        e.sample = big ? sample_hash(m) : 0;
+        e.fullFrame = sFrame;
+        e.w = m.w;
+        e.h = m.h;
+        e.version = next_version();
+    } else if (e.epoch != sEpoch) {
+        // Textures in memory may have changed since the last check.
+        bool full = true;
+        if (big) {
+            u64 s = sample_hash(m);
+            full = s != e.sample || sFrame - e.fullFrame >= kFullHashFrames;
+            e.sample = s;
         }
-        return false;
-    }
-    if (gx_bits(mode1, 8, 8) != 0) {
-        WARN_ONCE("gx: texture with mipmaps (%ux%u fmt %u, max LOD %u/16); only level 0 is used\n", w, h, fmt,
-                  gx_bits(mode1, 8, 8));
-    }
-
-    // Address (24 bits), format (4), size (10 + 10), and for CI formats the
-    // TLUT register (TMEM offset 10, format 2).
-    u64 key = (u64)addr | (u64)fmt << 24 | (u64)(w - 1) << 28 | (u64)(h - 1) << 38;
-    u32 entries = gx_tex_tlut_entries(fmt);
-    const u8* pal = nullptr;
-    u32 tlutFmt = 0;
-    if (entries != 0) {
-        if (gx.tmemHi == nullptr) {
-            return false;
-        }
-        u32 off = gx_bits(tlut, 0, 10) << 9;
-        u32 bytes = entries * 2;
-        tlutFmt = gx_bits(tlut, 10, 2);
-        pal = gx.tmemHi + off;
-        if (off + bytes > kTmemHiSize) {
-            // A CI14 palette running past the end of TMEM: pad with zeros
-            // rather than read beyond it.
-            static u8 sPadded[16384 * 2];
-            memset(sPadded, 0, sizeof(sPadded));
-            memcpy(sPadded, pal, kTmemHiSize - off);
-            pal = sPadded;
-            WARN_ONCE("gx: TLUT at TMEM %05x runs past the end of TMEM\n", off);
-        }
-        key |= (u64)gx_bits(tlut, 0, 12) << 48;
-    }
-
-    TexEntry& e = sCache[key];
-    bool fresh = e.version == 0;
-    if (fresh || e.epoch != sEpoch) {
-        u64 hash = hash_bytes(src, size, 0x6A09E667F3BCC908ull);
-        if (pal != nullptr) {
-            hash = hash_bytes(pal, entries * 2, hash);
-        }
-        sHashed++;
-        sHashedBytes += size;
-        if (fresh || hash != e.hash) {
-            e.rgba.resize((size_t)w * h * 4);
-            if (!gx_tex_decode(fmt, src, w, h, pal, tlutFmt, e.rgba.data())) {
-                sCache.erase(key);
-                return false;
+        if (full) {
+            u64 hash = full_hash(m);
+            e.fullFrame = sFrame;
+            if (hash != e.hash) {
+                e.hash = hash;
+                e.version = next_version();
             }
-            e.w = w;
-            e.h = h;
-            e.hash = hash;
-            e.version = next_version();
-            sDecoded++;
-            sDecodedBytes += e.rgba.size();
         }
-        e.epoch = sEpoch;
     }
+    e.epoch = sEpoch;
     e.lastFrame = sFrame;
 
-    out->key = key;
+    out->key = m.key;
     out->version = e.version;
     out->width = e.w;
     out->height = e.h;
-    out->rgba = e.rgba.data();
     // Sampling state can differ per use of the same image. Wrap: 0 clamp,
     // 1 repeat, 2 mirror (3 is invalid: repeat).
-    u32 ws = gx_bits(mode0, 0, 2), wt = gx_bits(mode0, 2, 2);
+    u32 ws = gx_bits(m.mode0, 0, 2), wt = gx_bits(m.mode0, 2, 2);
     out->wrapS = (u8)(ws == 3 ? 1 : ws);
     out->wrapT = (u8)(wt == 3 ? 1 : wt);
-    out->magLinear = (u8)gx_bits(mode0, 4, 1);
+    out->magLinear = (u8)gx_bits(m.mode0, 4, 1);
     // The min filter field (bits 5-7) is in the hardware encoding
     // (GX2HWFiltConv: NEAR 0, NEAR_MIP_NEAR 1, NEAR_MIP_LIN 2, LINEAR 4,
     // LIN_MIP_NEAR 5, LIN_MIP_LIN 6): its top bit is the base filter.
-    out->minLinear = (u8)gx_bits(mode0, 7, 1);
+    out->minLinear = (u8)gx_bits(m.mode0, 7, 1);
     return true;
+}
+
+const u8* gx_tex_pixels(int map) {
+    MapInfo m;
+    if (!resolve(map, &m)) {
+        return nullptr;
+    }
+    sPixels.resize((size_t)m.w * m.h * 4);
+    if (!gx_tex_decode(m.fmt, m.src, m.w, m.h, m.pal, m.tlutFmt, sPixels.data())) {
+        return nullptr;
+    }
+    sDecoded++;
+    sDecodedBytes += sPixels.size();
+    return sPixels.data();
 }
 
 void gx_tex_frame_end(void) {
@@ -416,15 +489,14 @@ void gx_tex_frame_end(void) {
         }
     }
     if (sFrame == 1 || sFrame % 600 == 0) {
-        size_t bytes = 0;
-        for (const auto& kv : sCache) {
-            bytes += kv.second.rgba.size();
-        }
-        port_log("gx: %u textures cached (%u KB RGBA); since last: %u decoded (%u KB), %u re-hashed (%u KB)\n",
-                 (u32)sCache.size(), (u32)(bytes / 1024), sDecoded, (u32)(sDecodedBytes / 1024), sHashed,
-                 (u32)(sHashedBytes / 1024));
+        port_log("gx: %u textures tracked; since last: %u decoded (%u KB), %u fully hashed (%u KB)\n",
+                 (u32)sCache.size(), sDecoded, (u32)(sDecodedBytes / 1024), sHashed, (u32)(sHashedBytes / 1024));
         sDecoded = sHashed = 0;
         sDecodedBytes = sHashedBytes = 0;
+    }
+    // Don't keep the largest image's pixels around.
+    if (sPixels.capacity() > 4u * 1024 * 1024) {
+        std::vector<u8>().swap(sPixels);
     }
 }
 

@@ -30,17 +30,20 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main**: milestones 1-3; `git log` for the tip. No remote, nothing pushed.
-- **Milestones 2 and 3 done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
+- **main**: milestones 1-3 and the globe of milestone 4; `git log` for the
+  tip. No remote, nothing pushed.
+- **Milestones 2-4 (globe) done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
   downloads the forecast from WiiLink, runs the first-run setup (date check,
-  region, city) and shows real weather on the 2D screens, drawn on SDL3 GPU
-  (D3D12), with touch (left mouse) as the Wii pointer. The globe is not drawn:
-  `earth.brres` is big-endian and nothing converts it yet (milestone 4); the
-  scene runs without it. Setup choices persist in the data directory, so later
-  runs start in the weather scene. Automated runs: `FORECAST_HIDDEN=1`,
-  `FORECAST_DUMP_FRAME=n[,m]` (writes `efb_<n>.bmp`),
-  `FORECAST_TOUCH=frame:x:y:frames[;...]`, `FORECAST_LOG_DRAWS=n` (TEV and
-  blend state of every draw in frame n). Shaders:
+  region, city), shows real weather on the 2D screens and draws the globe
+  (`earth.brres` converted at load), on SDL3 GPU (D3D12), 60 fps, with touch
+  (left mouse) as the Wii pointer and keys for the other Remote buttons
+  (- / + zoom, Esc = B, Home). "Back to the Wii Menu" quits. Setup choices
+  persist in the data directory, so later runs start in the weather scene.
+  Automated runs: `FORECAST_HIDDEN=1`, `FORECAST_DUMP_FRAME=n[,m]` (writes
+  `efb_<n>.bmp`), `FORECAST_TOUCH=frame:x:y:frames[;...]` (the Globe button is
+  at 0.85:0.9 on the weather pages), `FORECAST_BUTTON=frame:minus|plus|b|home|1|2:frames[;...]`,
+  `FORECAST_LOG_DRAWS=n` (TEV, indirect and blend state of every draw in frame
+  n); the log prints fps and busy % every 600 frames. Shaders:
   `tools\build_shaders.bat` after editing `port/gx/shaders/*.hlsl`. Sound is off until its archive is converted
   (`Sound.cpp`, `SoundManager.cpp`, `WeatherScene.cpp`). The cursor effect is
   dropped for good (`Scene.cpp`): the targets are touchscreens, so no cursor
@@ -100,19 +103,22 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 1. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
-2. **Milestone 4: the globe.** Convert `earth.brres` (MDL0, TEX0, PLT0 and the
-   animations) to native byte order at load, like `port/res/lyt_swap.cpp`;
-   then remove the "no globe" guards (`SimpleModel.cpp`, `PORT_HAS_EARTH_MDL`
-   in `SimpleGlobe.cpp`). Includes the audit's g3d items (item 3).
-   The texture packs come with it. Compare frames with Dolphin, which has the
-   same WiiLink-patched channel.
-   Renderer gaps that may show up there: indirect texturing
-   (emboss), fog, z textures, EFB-copy format conversion, logic ops. Each logs
-   once. Every image in use is also re-hashed each frame, because the channel
-   calls GXInvalidateTexAll every frame (about 80 KB a frame now); profile
-   that once the globe draws.
-3. **Rest of `notes/64bit-audit.md`.** g3d `ResTexPlttInfoData` and PAT0 bind
-   arrays (globe, milestone 4); snd TaskManager unit size (with sound); make
+2. **Rest of milestone 4: the texture packs.** Load the upscaled Dolphin-format
+   packs (`C:\WiiPC\textures-png-backup\WiiPC-Forecast` and `...\WiiPC-Earth`):
+   compute Dolphin's texture hash (`tex1_<w>x<h>_<hash>_<fmt>` names) in
+   `gx_tex.cpp` and let the backend upload the PNG instead of the decoded
+   image. Also still to compare with Dolphin (same WiiLink-patched channel):
+   the globe's emboss and water (indirect texturing and the emboss/env
+   texgens are implemented but only judged by eye), and the left part of the
+   forecast pages' title belt, which looked empty in dumps.
+   Renderer gaps that log once if used: fog, z textures, EFB-copy format
+   conversion, logic ops, the indirect "unmodified texcoord for LOD" bit
+   (textures have 1 mip level).
+   Memory: decoded images are no longer kept (the backend decodes when it
+   uploads); the globe's 28 1024x1024 tiles are about 120 MB of RGBA8 on the
+   GPU. iOS will want a compressed GPU format (BC1/ASTC from CMPR) or fewer tiles.
+3. **Rest of `notes/64bit-audit.md`.** PAT0 bind arrays (no PAT0 in
+   earth.brres; only if another file needs them); snd TaskManager unit size (with sound); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
    items are moot (cursor effect dropped).
 4. **Sound** (milestone 5): convert brsar at load, port AX to SDL3 audio, then

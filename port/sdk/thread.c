@@ -23,6 +23,7 @@ typedef struct PortThread {
     void* result;
     u32 stackSize;
     s32 priority;
+    u16 attr; // OSCreateThread flags: bit 0 = detached
     SDL_AtomicInt started;
     SDL_AtomicInt finished;
 } PortThread;
@@ -61,9 +62,9 @@ void OSInitThreadQueue(OSThreadQueue* queue) {
 BOOL OSCreateThread(OSThread* thread, OSThreadFunc func, void* funcArg, void* stackBegin, u32 stackSize,
                     s32 prio, u16 flags) {
     (void)stackBegin; // SDL allocates its own stack
-    (void)flags;
     memset(thread, 0, sizeof(*thread));
     PortThread* pt = port_thread(thread);
+    pt->attr = flags;
     pt->func = func;
     pt->arg = funcArg;
     // Host code (C library, SDL) needs more stack than the Wii's.
@@ -106,8 +107,18 @@ BOOL OSIsThreadTerminated(OSThread* thread) {
     return SDL_GetAtomicInt(&port_thread(thread)->finished) != 0;
 }
 
+// The thread attribute OSCreateThread takes: a detached thread cannot be
+// joined.
+#define PORT_THREAD_ATTR_DETACH 1
+
 BOOL OSJoinThread(OSThread* thread, void* val) {
     PortThread* pt = port_thread(thread);
+    // As on the Wii, joining a detached thread fails at once instead of
+    // waiting (WiiConnect24's downloader is detached and never exits; the
+    // channel joins it when returning to the menu).
+    if (pt->attr & PORT_THREAD_ATTR_DETACH) {
+        return FALSE;
+    }
     if (pt->handle != NULL) {
         SDL_WaitThread(pt->handle, NULL);
         pt->handle = NULL;
@@ -120,6 +131,7 @@ BOOL OSJoinThread(OSThread* thread, void* val) {
 
 void OSDetachThread(OSThread* thread) {
     PortThread* pt = port_thread(thread);
+    pt->attr |= PORT_THREAD_ATTR_DETACH;
     if (pt->handle != NULL) {
         SDL_DetachThread(pt->handle);
         pt->handle = NULL;

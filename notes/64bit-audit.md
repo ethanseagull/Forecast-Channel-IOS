@@ -247,6 +247,7 @@ resolved by `ConvertOffsToPtr`. lyt's real exposure is through TPL and `GXTexObj
 
 - **[Medium]** `include/nw4r/ut/ut_LockedCache.h:21-23` — `LC::GetBase()` returns the hard-wired `0xE0000000`.
   - g3d dereferences it (`g3d_calcview.cpp:667, 841`; `g3d_scnmdlsmpl.cpp:97`) whenever `LC::Lock()` succeeds.
+  - **Fixed** (milestone 4): `LC::Lock()` fails on the port, so g3d uses main memory.
   - Fix: back it with a static 16 KB buffer, or make `Lock()` always fail on the port.
 - **Checked:**
   - `ut_list` uses a `u16` offset and `u8*` arithmetic; `ut_LinkList` uses an `int` offset.
@@ -267,6 +268,7 @@ ResMdl, ResNode, ResTex, ResPltt, ResVtx*Data, ResTagDL and the material DLs are
   - `BindTex_` and `BindPltt_` (`g3d_resmat.cpp:1506, 1540`) and `Release` (`:1587-1588`) write 8 bytes into 4-byte slots.
   - The two fields are only used as a "bound" marker (`:1557, :1567`).
   - Fix: make both `u32` (a GX address, or just a non-zero flag) and add `static_assert(sizeof(ResTexPlttInfoData) == 0x34)`.
+  - **Fixed** (milestone 4): both are `PTR32` on the port, with the size assert.
 - **[High]** `src/nw4r/g3d/res/g3d_resanmtexpat.cpp:125-160` (Bind), `:67-68, 113, 122` (GetAnmResult), `:182-189` (Release) — **PAT0**.
   - `toResTexArray` and `toResPlttArray` (`g3d_resanmtexpat.h:88-89`) point at 4-byte slots in the file. The code indexes them as `ResTex[]`/`ResPltt[]`, which are pointer-sized, and writes found textures into them.
   - Result: an 8-byte stride overruns the texture array into the palette array.

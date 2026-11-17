@@ -2,8 +2,8 @@
 //
 // Each primitive's vertices are transformed by the position matrix and the
 // projection, mapped through the XF viewport onto the EFB, lit (both colour
-// channels) and given their texture coordinates (texgens, texture matrices,
-// dual-texture post matrices). The result is a triangle list in SDL GPU clip
+// channels) and given their texture coordinates (texgens incl. colour and
+// emboss, texture matrices, dual-texture post matrices). The result is a triangle list in SDL GPU clip
 // space that the pass-through vertex shader draws as is.
 //
 // Adapted from the New 3DS port (C:\forecast-3ds port/gx/gx_draw.cpp), minus
@@ -203,6 +203,13 @@ static void transform(const XfDraw& x, const GXVertexIn* in, u32 count, GXVtxOut
             needNormal = true;
         }
     }
+    // Emboss texgens (type 1) need the binormal and tangent in eye space.
+    bool needNbt = false;
+    for (u32 g = 0; g < x.numTexGens && g < 8; g++) {
+        if (gx_bits(gx.xfReg[0x40 + g], 4, 3) == 1) {
+            needNbt = true;
+        }
+    }
 
     for (u32 vi = 0; vi < count; vi++) {
         const GXVertexIn& v = in[vi];
@@ -243,6 +250,17 @@ static void transform(const XfDraw& x, const GXVertexIn* in, u32 count, GXVtxOut
                 n[2] /= len;
             }
         }
+        // Binormal and tangent through the normal matrix, not normalized
+        // (Dolphin's VertexShaderGen _binormal / _tangent).
+        f32 bin[3] = {0, 0, 0}, tng[3] = {0, 0, 0};
+        if (needNbt) {
+            u32 nb = 0x400 + (pm & 31) * 3;
+            for (int r = 0; r < 3; r++) {
+                f32 m0 = gx_xf_float(nb + r * 3), m1 = gx_xf_float(nb + r * 3 + 1), m2 = gx_xf_float(nb + r * 3 + 2);
+                bin[r] = m0 * v.binormal[0] + m1 * v.binormal[1] + m2 * v.binormal[2];
+                tng[r] = m0 * v.tangent[0] + m1 * v.tangent[1] + m2 * v.tangent[2];
+            }
+        }
 
         for (int c = 0; c < 2; c++) {
             if ((u32)c < x.numChans) {
@@ -278,7 +296,33 @@ static void transform(const XfDraw& x, const GXVertexIn* in, u32 count, GXVtxOut
                 continue;
             }
             if (type == 1) {
-                WARN_ONCE("gx: emboss texgen not supported\n");
+                // Emboss (GX_TG_BUMP0-7): the source texgen's result (bits
+                // 12-14; GX requires a lower-numbered one, already done)
+                // moved by the direction to light n (bits 15-17) in the
+                // binormal / tangent frame: s += L.binormal, t += L.tangent.
+                // Dolphin's VertexShaderGen; its "tangent" / "binormal" are
+                // the NBT's 2nd / 3rd vectors, as here. No texture or post
+                // matrix applies.
+                u32 srcGen = gx_bits(info, 12, 3);
+                u32 lbase = 0x600 + gx_bits(info, 15, 3) * 16;
+                f32 l[3] = {gx_xf_float(lbase + 10) - eye[0], gx_xf_float(lbase + 11) - eye[1],
+                            gx_xf_float(lbase + 12) - eye[2]};
+                f32 llen = sqrtf(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+                if (llen > 0.0f) {
+                    l[0] /= llen;
+                    l[1] /= llen;
+                    l[2] /= llen;
+                }
+                static const f32 kNone[3] = {0.0f, 0.0f, 1.0f};
+                const f32* s = srcGen < g ? o.tex[srcGen] : kNone;
+                if (srcGen >= g) {
+                    WARN_ONCE("gx: emboss texgen %lu from texgen %lu (not computed yet)\n", (unsigned long)g,
+                              (unsigned long)srcGen);
+                }
+                tc[0] = s[0] + l[0] * bin[0] + l[1] * bin[1] + l[2] * bin[2];
+                tc[1] = s[1] + l[0] * tng[0] + l[1] * tng[1] + l[2] * tng[2];
+                tc[2] = s[2];
+                continue;
             }
             f32 src[4] = {0, 0, 1, 1};
             if (row == 0) {

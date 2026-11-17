@@ -385,21 +385,46 @@ static void decode_vertex(const VtxFormat& vf, const u8* p, GXVertexIn* v) {
         v->pos[2] = vf.pos.count == 3 ? read_comp(d + 2 * cs, vf.pos.type, vf.pos.frac, be) : 0.0f;
     }
 
+    // The binormal and tangent of the last NBT normal: the hardware keeps
+    // them for vertices that don't have their own.
+    static f32 sBinormal[3], sTangent[3];
     if (vf.nrm.mode != ATTR_NONE) {
         u32 cs = kCompSize[vf.nrm.type];
         u32 vecs = vf.nbt ? 3 : 1;
-        const u8* d;
+        // Vector k (0 normal, 1 binormal, 2 tangent) of an NBT normal.
+        const u8* d[3];
+        bool vbe[3];
         if (vf.nrm.mode >= ATTR_INDEX8 && vf.nbt && vf.nrmIndex3) {
-            // Three indices; only the normal is used.
-            d = attr_data(vf.nrm, 1, 0, &p, &be);
-            p += attr_size(vf.nrm, 0) * 2;
+            // Three indices, one per vector: vector k is at index k's
+            // element, k * 3 components in (as Dolphin's VertexLoader_Normal
+            // reads it).
+            for (u32 k = 0; k < 3; k++) {
+                d[k] = attr_data(vf.nrm, 1, 0, &p, &vbe[k]) + k * 3 * cs;
+            }
         } else {
-            d = attr_data(vf.nrm, 1, vecs * 3 * cs, &p, &be);
+            d[0] = attr_data(vf.nrm, 1, vecs * 3 * cs, &p, &vbe[0]);
+            for (u32 k = 1; k < 3; k++) {
+                d[k] = d[0] + k * 3 * cs;
+                vbe[k] = vbe[0];
+            }
         }
         for (int i = 0; i < 3; i++) {
-            v->nrm[i] = read_comp(d + i * cs, vf.nrm.type, vf.nrm.frac, be);
+            v->nrm[i] = read_comp(d[0] + i * cs, vf.nrm.type, vf.nrm.frac, vbe[0]);
+        }
+        if (vf.nbt) {
+            // Direct data is inside the stream (run_draw checked its size);
+            // attr_data checked only 4 bytes at an indexed element.
+            bool ok = vf.nrm.mode == ATTR_DIRECT || (gx_addr_ok(d[1], 3 * cs) && gx_addr_ok(d[2], 3 * cs));
+            for (int i = 0; i < 3; i++) {
+                sBinormal[i] = ok ? read_comp(d[1] + i * cs, vf.nrm.type, vf.nrm.frac, vbe[1]) : 0.0f;
+                sTangent[i] = ok ? read_comp(d[2] + i * cs, vf.nrm.type, vf.nrm.frac, vbe[2]) : 0.0f;
+            }
         }
         v->hasNrm = 1;
+    }
+    for (int i = 0; i < 3; i++) {
+        v->binormal[i] = sBinormal[i];
+        v->tangent[i] = sTangent[i];
     }
 
     for (int c = 0; c < 2; c++) {
@@ -514,9 +539,16 @@ void gx_cp_run(const u8* data, u32 size) {
             if (end - p < 8) {
                 goto truncated;
             }
-            const u8* list = (const u8*)(uintptr_t)gx_be32(p);
+            // GXCallDisplayList writes the list as a GX address
+            // (port_gx_write_p), not a host pointer.
+            const u8* list = gx_mem(gx_be32(p));
             u32 listSize = gx_be32(p + 4);
             p += 8;
+            if (!gx_addr_ok(list, listSize)) {
+                port_log("gx: display list %08lx (%lu bytes) unmapped\n", (unsigned long)gx_be32(p - 8),
+                         (unsigned long)listSize);
+                break;
+            }
             gx_cp_run(list, listSize);
             break;
         }

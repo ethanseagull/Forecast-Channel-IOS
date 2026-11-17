@@ -60,7 +60,7 @@ int main() {
     bind(0, 0x1000, 1, 8, 4);
     CHECK(gx_tex_get(0, &d));
     CHECK(d.width == 8 && d.height == 4 && d.version != 0);
-    CHECK(d.rgba[4] == 0x40 && d.rgba[7] == 0x40);
+    CHECK(gx_tex_pixels(0)[4] == 0x40 && gx_tex_pixels(0)[7] == 0x40);
     u32 v1 = d.version;
 
     // Same frame, same epoch: no change.
@@ -72,7 +72,7 @@ int main() {
     CHECK(gx_tex_get(0, &d2) && d2.version == v1);
     // After an invalidate: re-hashed, re-decoded, new version.
     gx_tex_invalidate();
-    CHECK(gx_tex_get(0, &d2) && d2.version != v1 && d2.rgba[4] == 0x80);
+    CHECK(gx_tex_get(0, &d2) && d2.version != v1 && gx_tex_pixels(0)[4] == 0x80);
     u32 v2 = d2.version;
     // Invalidate with unchanged bytes: same version.
     gx_tex_invalidate();
@@ -106,13 +106,13 @@ int main() {
     sMem[0x2000] = 5;
     tmem[0x400 + 10] = 0xF8; // entry 5 = red
     bind(4, 0x2000, 9, 8, 4, 0, 0, 2 | 1 << 10);
-    CHECK(gx_tex_get(4, &d2) && d2.rgba[0] == 255 && d2.rgba[1] == 0 && d2.rgba[3] == 255);
+    CHECK(gx_tex_get(4, &d2) && gx_tex_pixels(4)[0] == 255 && gx_tex_pixels(4)[1] == 0 && gx_tex_pixels(4)[3] == 255);
     u32 vci = d2.version;
     // Palette change + invalidate: re-decoded.
     tmem[0x400 + 10] = 0x00;
     tmem[0x400 + 11] = 0x1F; // blue
     gx_tex_invalidate();
-    CHECK(gx_tex_get(4, &d2) && d2.version != vci && d2.rgba[0] == 0 && d2.rgba[2] == 255);
+    CHECK(gx_tex_get(4, &d2) && d2.version != vci && gx_tex_pixels(4)[0] == 0 && gx_tex_pixels(4)[2] == 255);
     // Same image with another TLUT register: another key.
     u64 k = d2.key;
     bind(4, 0x2000, 9, 8, 4, 0, 0, 3 | 1 << 10);
@@ -142,7 +142,7 @@ int main() {
         gx_tex_frame_end();
     }
     u32 v1b = d2.version;
-    CHECK(gx_tex_get(0, &d) && d.version != v2 && d.rgba[4] == 0x80);
+    CHECK(gx_tex_get(0, &d) && d.version != v2 && gx_tex_pixels(0)[4] == 0x80);
     CHECK(gx_tex_get(1, &d2) && d2.version == v1b);
 
     printf(sFailures ? "cache test: %d failures\n" : "cache test: all passed\n", sFailures);

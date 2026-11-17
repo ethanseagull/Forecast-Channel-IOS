@@ -9,12 +9,22 @@
 // Implemented: 1-16 stages (genMode), tev orders (texmap, texcoord, enable,
 // ras channel), colour and alpha combiners (all inputs, bias, add/sub, scale,
 // clamp, dest register, compare modes), konstant selects, the 4 swap tables
-// for ras and tex, alpha test.
-// Not implemented (yet): indirect texturing (BP 0x10-0x27; the texcoords are
-// used as is), fog (BP 0xEE-0xF2), z textures (BP 0xF4, 0xF5), the alpha-bump
-// ras channels 5/6 (read as zero, like 2-4 and 7), destination alpha (BP
-// 0x42), RGBA6 / logic op output formats. Blending, depth and culling are
-// fixed-function pipeline state, set by the backend.
+// for ras and tex, alpha test, indirect texturing (0-4 indirect stages, their
+// texmap / texcoord order and coordinate scale, the 3 indirect matrices and
+// the dynamic S / T matrices, per-stage format, bias, wrap, add-previous) and
+// the alpha-bump ras channels 5 / 6.
+// Not implemented (yet): fog (BP 0xEE-0xF2), z textures (BP 0xF4, 0xF5),
+// destination alpha (BP 0x42), RGBA6 / logic op output formats, the indirect
+// "unmodified texcoord for LOD" bit (the port's textures have no mip levels,
+// so there is no LOD to pick). Blending, depth and culling are fixed-function
+// pipeline state, set by the backend.
+//
+// Texture coordinates: the varyings are normalized (s/q, t/q). A stage
+// without an indirect command samples them as is. Indirect texturing works as
+// the hardware does, in texel units with 7 fraction bits (S17.7): the
+// normalized coordinate times the texcoord's SU scale (BP 0x30 + 2n, the size
+// GX sets for it) times 128, and back to normalized with the size of the
+// texture map that is sampled (its BP image0 register).
 //
 // Bindings follow SDL3 GPU's D3D12 conventions for fragment shaders: sampled
 // textures t0-t7 / samplers s0-s7 in space2, uniform buffer slot 0 at b0 in
@@ -34,6 +44,14 @@ cbuffer GXTevUniforms : register(b0, space3) {
     uint alphaCompare; // BP 0xF3
     uint texBound;     // bit n: map n has a real texture
     uint pad;
+    uint4 tevInd[4];    // BP 0x10-0x1F: indirect command of TEV stage n
+    uint4 indMtx[3];    // BP 0x06-0x0E: indirect matrices 0-2, 3 words each (+3 unused)
+    uint indScale0;     // BP 0x25: coordinate scale of indirect stages 0, 1
+    uint indScale1;     // BP 0x26: of indirect stages 2, 3
+    uint indRef;        // BP 0x27: texmap / texcoord of indirect stages 0-3
+    uint pad2;
+    uint4 tcScale[2];   // texcoord n: SU scale - 1, S bits 0-15, T 16-31 (BP 0x30 + 2n, 0x31 + 2n)
+    uint4 texImage0[2]; // texture map n: BP image0 (width - 1 bits 0-9, height - 1 bits 10-19)
 };
 
 Texture2D<float4> gxTex0 : register(t0, space2);
@@ -65,6 +83,10 @@ uint ColorEnvReg(uint n) { return Word(colorEnv[n >> 2], n & 3u); }
 uint AlphaEnvReg(uint n) { return Word(alphaEnv[n >> 2], n & 3u); }
 uint TevOrderReg(uint n) { return Word(tevOrder[n >> 2], n & 3u); }
 uint KselReg(uint n) { return Word(ksel[n >> 2], n & 3u); }
+uint TevIndReg(uint n) { return Word(tevInd[n >> 2], n & 3u); }
+uint IndMtxReg(uint n) { return Word(indMtx[n >> 2], n & 3u); }
+uint TcScaleReg(uint n) { return Word(tcScale[n >> 2], n & 3u); }
+uint TexImage0Reg(uint n) { return Word(texImage0[n >> 2], n & 3u); }
 
 // --- inputs ------------------------------------------------------------------
 
@@ -110,6 +132,58 @@ float3 TexCoord(GXVaryings i, uint n) {
     case 6: return i.tex6;
     default: return i.tex7;
     }
+}
+
+// --- indirect texturing (Dolphin's UberShaderPixel / PixelShaderGen) -----------
+
+// Texture coordinate n in texels, S17.7 fixed point: the normalized
+// coordinate times the texcoord's SU scale, as the hardware's setup unit
+// hands it to the TEV. Truncated like Dolphin's int2() conversion.
+int2 FixedCoord(float3 stq, uint n) {
+    uint r = TcScaleReg(n);
+    float2 scale = float2((float)((r & 0xFFFFu) + 1u), (float)((r >> 16) + 1u));
+    float q = stq.z != 0.0 ? stq.z : 1.0;
+    return int2(stq.xy / q * scale * 128.0);
+}
+
+// An S17.7 texel coordinate of texture map 0-7 as a normalized one: divided
+// by 128 times the map's size (its image0 register, as the game set it; EFB
+// copies are larger on the GPU, normalized coordinates don't care).
+float2 FixedToUv(uint map, int2 c) {
+    uint r = TexImage0Reg(map);
+    float2 size = float2((float)((r & 0x3FFu) + 1u), (float)(((r >> 10) & 0x3FFu) + 1u));
+    return float2(c) / (size * 128.0);
+}
+
+// Indirect stage s (0-3): looks up its texture (texmap / texcoord from BP
+// 0x27, 6 bits a stage: map 0-2, coord 3-5) at its coordinate scaled down by
+// 2^n (BP 0x25 / 0x26, 8 bits a stage: S 0-3, T 4-7). The offsets are the
+// texel's (A, B, G) as (s, t, u), 0-255; an unbound map reads as white.
+int3 IndLookup(GXVaryings i, uint s) {
+    uint ref = indRef >> (s * 6u);
+    uint map = ref & 7u;
+    uint coord = (ref >> 3) & 7u;
+    uint sc = (s < 2u ? indScale0 : indScale1) >> ((s & 1u) * 8u);
+    int2 c = FixedCoord(TexCoord(i, coord), coord) >> uint2(sc & 15u, (sc >> 4) & 15u);
+    int4 t = int4(255, 255, 255, 255);
+    if ((texBound >> map & 1u) != 0u)
+        t = int4(round(SampleMap(map, FixedToUv(map, c)) * 255.0));
+    return t.abg;
+}
+
+// Indirect matrix element: signed 11 bits (S0.10).
+int Sext11(uint v) {
+    return (int)(v << 21) >> 21;
+}
+
+// Indirect wrap 0 off, 1-5 repeat every 256, 128, 64, 32, 16 texels, 6 / 7
+// zero.
+int IndWrap(int c, uint mode) {
+    if (mode == 0u)
+        return c;
+    if (mode < 6u)
+        return c & (int)(0xFFFEu >> mode);
+    return 0;
 }
 
 // Konstant select (kcsel / kasel): 0-7 the fractions 1, 7/8 .. 1/8 (as
@@ -264,6 +338,26 @@ float4 main(GXVaryings i) : SV_Target0 {
     uint colorDest = 0u;
     uint alphaDest = 0u;
 
+    // The indirect stages' lookups (genMode bits 16-18: how many), once per
+    // pixel; TEV stages pick one by number.
+    uint numInd = (genMode >> 16) & 7u;
+    int3 ind0 = int3(0, 0, 0);
+    int3 ind1 = int3(0, 0, 0);
+    int3 ind2 = int3(0, 0, 0);
+    int3 ind3 = int3(0, 0, 0);
+    if (numInd > 0u)
+        ind0 = IndLookup(i, 0u);
+    if (numInd > 1u)
+        ind1 = IndLookup(i, 1u);
+    if (numInd > 2u)
+        ind2 = IndLookup(i, 2u);
+    if (numInd > 3u)
+        ind3 = IndLookup(i, 3u);
+    // The texel coordinate of the last stage (S17.7, kept for add-previous)
+    // and the alpha bump value, carried from stage to stage.
+    int2 tevCoord = int2(0, 0);
+    int alphaBump = 0;
+
     [loop]
     for (uint n = 0u; n < numStages; n++) {
         uint cc = ColorEnvReg(n);
@@ -271,24 +365,97 @@ float4 main(GXVaryings i) : SV_Target0 {
         // Even stages in bits 0-11, odd in 12-23: texmap 0-2, texcoord 3-5,
         // texture enable 6, ras channel 7-9.
         uint order = TevOrderReg(n >> 1) >> ((n & 1u) * 12u);
+        uint map = order & 7u;
+        uint coordId = (order >> 3) & 7u;
+        float3 stq = TexCoord(i, coordId);
+        int2 fixedUv = FixedCoord(stq, coordId);
 
-        int4 tex = int4(255, 255, 255, 255);
-        if ((order & 0x40u) != 0u) {
-            uint map = order & 7u;
-            if ((texBound >> map & 1u) != 0u) {
-                float3 stq = TexCoord(i, (order >> 3) & 7u);
-                float q = stq.z != 0.0 ? stq.z : 1.0;
-                tex = int4(round(SampleMap(map, stq.xy / q) * 255.0));
-                tex = Swizzle((ac >> 2) & 3u, tex);
+        // Indirect command: ind stage 0-1, format 2-3, bias 4-6, alpha bump
+        // select 7-8, matrix 9-10 (0 none, 1-3 matrix 0-2), matrix type
+        // 11-12 (0 the matrix, 1 dynamic S, 2 dynamic T), wrap S 13-15, wrap
+        // T 16-18, unmodified texcoord for LOD 19 (ignored), add previous 20.
+        uint ti = TevIndReg(n);
+        float2 uv;
+        if (ti != 0u) {
+            uint bt = ti & 3u;
+            uint fmt = (ti >> 2) & 3u;
+            uint bias = (ti >> 4) & 7u;
+            uint bs = (ti >> 7) & 3u;
+            uint mtx = (ti >> 9) & 3u;
+            uint mtxType = (ti >> 11) & 3u;
+            int3 ic = int3(0, 0, 0);
+            if (bt < numInd)
+                ic = bt == 0u ? ind0 : (bt == 1u ? ind1 : (bt == 2u ? ind2 : ind3));
+
+            // Alpha bump: the selected offset's top bits (the ones the
+            // format leaves out of the offset, at most 5).
+            if (bs != 0u) {
+                int sel = bs == 1u ? ic.x : (bs == 2u ? ic.y : ic.z);
+                alphaBump = sel & (fmt == 0u ? 0xF8 : (fmt == 1u ? 0xE0 : (fmt == 2u ? 0xF0 : 0xF8)));
             }
+            // Format: 8, 5, 4 or 3 low bits; bias -128 for 8 bits, else +1.
+            int fmtMask = fmt == 0u ? 255 : (fmt == 1u ? 31 : (fmt == 2u ? 15 : 7));
+            int biasAdd = fmt == 0u ? -128 : 1;
+            ic = (ic & fmtMask) + int3((bias & 1u) != 0u ? biasAdd : 0, (bias & 2u) != 0u ? biasAdd : 0,
+                                       (bias & 4u) != 0u ? biasAdd : 0);
+
+            // Offset (S17.7): matrix (S0.10) times offsets, or the stage's
+            // texcoord times the s / t offset, scaled by 2^(exp) where the
+            // registers hold exp + 17 split 2 / 2 / 2 bits across the three
+            // words (bits 22-23).
+            int2 off = int2(0, 0);
+            if (mtx != 0u) {
+                uint b = (mtx - 1u) * 3u;
+                uint wa = IndMtxReg(b);
+                uint wb = IndMtxReg(b + 1u);
+                uint wc = IndMtxReg(b + 2u);
+                int shift = 17 - (int)(((wa >> 22) & 3u) | ((wb >> 22) & 3u) << 2 | ((wc >> 22) & 3u) << 4);
+                if (mtxType == 0u) {
+                    // Row 0 (s) in bits 0-10, row 1 (t) in 11-21.
+                    off.x = Sext11(wa) * ic.x + Sext11(wb) * ic.y + Sext11(wc) * ic.z;
+                    off.y = Sext11(wa >> 11) * ic.x + Sext11(wb >> 11) * ic.y + Sext11(wc >> 11) * ic.z;
+                    off = off >> 3;
+                } else if (mtxType == 1u) {
+                    off = (fixedUv * ic.xx) >> 8;
+                } else if (mtxType == 2u) {
+                    off = (fixedUv * ic.yy) >> 8;
+                }
+                shift = clamp(shift, -31, 31);
+                off = shift >= 0 ? off >> (uint)shift : off << (uint)(-shift);
+            }
+
+            int2 wrapped = int2(IndWrap(fixedUv.x, (ti >> 13) & 7u), IndWrap(fixedUv.y, (ti >> 16) & 7u));
+            if (n == 0u || ((ti >> 20) & 1u) == 0u)
+                tevCoord = wrapped + off;
+            else
+                tevCoord += wrapped + off;
+            // The hardware's coordinates are 24 bits.
+            tevCoord = (tevCoord << 8) >> 8;
+            uv = FixedToUv(map, tevCoord);
+        } else {
+            tevCoord = fixedUv;
+            float q = stq.z != 0.0 ? stq.z : 1.0;
+            uv = stq.xy / q;
         }
 
-        // Ras channel: 0 colour 0, 1 colour 1; 5/6 alpha bump (indirect
-        // texturing, not implemented) and the rest read as zero.
+        int4 tex = int4(255, 255, 255, 255);
+        if ((order & 0x40u) != 0u && (texBound >> map & 1u) != 0u) {
+            tex = int4(round(SampleMap(map, uv) * 255.0));
+            tex = Swizzle((ac >> 2) & 3u, tex);
+        }
+
+        // Ras channel: 0 colour 0, 1 colour 1, 5 alpha bump, 6 alpha bump
+        // normalized (the 5 bits stretched to 8); the rest read as zero.
         uint chan = (order >> 7) & 7u;
         int4 ras = int4(0, 0, 0, 0);
-        if (chan < 2u)
+        if (chan < 2u) {
             ras = Swizzle(ac & 3u, chan == 0u ? ras0 : ras1);
+        } else if (chan == 5u) {
+            ras = int4(alphaBump, alphaBump, alphaBump, alphaBump);
+        } else if (chan == 6u) {
+            int nb = alphaBump | (alphaBump >> 5);
+            ras = int4(nb, nb, nb, nb);
+        }
 
         // ksel word n/2: kcsel 4-8, kasel 9-13 for even stages, 14-18 and
         // 19-23 for odd.

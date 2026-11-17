@@ -57,6 +57,69 @@ static void window_to_pos(f32 wx, f32 wy, Vec2* pos) {
     pos->y = (wy - y0) / dh * 2.0f - 1.0f;
 }
 
+// The Wii Remote's other buttons, until the touch design (milestone 7) gives
+// them gestures: keys on Windows (- / + zoom the globe, Esc or Backspace = B,
+// Home = HOME, 1 / 2), and for automated runs FORECAST_BUTTON =
+// frame:name:frames[;...] with name one of minus plus b home 1 2.
+static u32 keyboard_buttons(void) {
+    u32 b = 0;
+    const bool* k = SDL_GetKeyboardState(NULL);
+    if (k != NULL) {
+        if (k[SDL_SCANCODE_MINUS] || k[SDL_SCANCODE_KP_MINUS]) {
+            b |= WPAD_BUTTON_MINUS;
+        }
+        if (k[SDL_SCANCODE_EQUALS] || k[SDL_SCANCODE_KP_PLUS]) {
+            b |= WPAD_BUTTON_PLUS;
+        }
+        if (k[SDL_SCANCODE_ESCAPE] || k[SDL_SCANCODE_BACKSPACE]) {
+            b |= WPAD_BUTTON_B;
+        }
+        if (k[SDL_SCANCODE_HOME]) {
+            b |= WPAD_BUTTON_HOME;
+        }
+        if (k[SDL_SCANCODE_1]) {
+            b |= WPAD_BUTTON_1;
+        }
+        if (k[SDL_SCANCODE_2]) {
+            b |= WPAD_BUTTON_2;
+        }
+    }
+
+    static const char* sScript;
+    static bool sScriptRead;
+    static u32 sCalls;
+    if (!sScriptRead) {
+        sScript = SDL_getenv("FORECAST_BUTTON");
+        sScriptRead = true;
+    }
+    // KPADRead runs once a frame; frames counted from 1.
+    sCalls++;
+    for (const char* t = sScript; t != NULL && *t != '\0';) {
+        unsigned start = 0, len = 0;
+        char name[16] = {0};
+        if (SDL_sscanf(t, "%u:%15[^:]:%u", &start, name, &len) == 3 && sCalls >= start && sCalls < start + len) {
+            if (SDL_strcmp(name, "minus") == 0) {
+                b |= WPAD_BUTTON_MINUS;
+            } else if (SDL_strcmp(name, "plus") == 0) {
+                b |= WPAD_BUTTON_PLUS;
+            } else if (SDL_strcmp(name, "b") == 0) {
+                b |= WPAD_BUTTON_B;
+            } else if (SDL_strcmp(name, "home") == 0) {
+                b |= WPAD_BUTTON_HOME;
+            } else if (SDL_strcmp(name, "1") == 0) {
+                b |= WPAD_BUTTON_1;
+            } else if (SDL_strcmp(name, "2") == 0) {
+                b |= WPAD_BUTTON_2;
+            }
+        }
+        t = SDL_strchr(t, ';');
+        if (t != NULL) {
+            t++;
+        }
+    }
+    return b;
+}
+
 s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
     if (numSamples == 0) {
         return 0;
@@ -89,6 +152,8 @@ s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
         sShowAfterRelease = false;
     }
     sWasDown = down;
+
+    hold |= keyboard_buttons();
 
     s->hold = hold;
     s->trig = hold & ~sHold;

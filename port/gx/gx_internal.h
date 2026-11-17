@@ -94,6 +94,11 @@ bool gx_addr_ok(const void* p, u32 size);
 struct GXVertexIn {
     f32 pos[3];
     f32 nrm[3];
+    // The 2nd and 3rd vectors of an NBT normal (GX: binormal, tangent), for
+    // the emboss texgen. Vertices without them get the last ones decoded, as
+    // the hardware keeps them.
+    f32 binormal[3];
+    f32 tangent[3];
     u8 clr[2][4];
     f32 tex[8][2];
     u8 pnMtx;
@@ -138,36 +143,54 @@ struct GXTevUniforms {
     u32 ksel[8];      // BP 0xF6-0xFD: konst selects and swap tables
     s32 tevReg[4][4]; // [PREV, C0, C1, C2][R, G, B, A], signed 11-bit as on the GPU
     s32 konst[4][4];  // [K0..K3][R, G, B, A], 0-255
-    u32 genMode;      // BP 0x00: number of TEV stages (bits 10-13, + 1) etc.
+    u32 genMode;      // BP 0x00: number of TEV stages (bits 10-13, + 1), indirect stages (16-18) etc.
     u32 alphaCompare; // BP 0xF3
     u32 texBound;     // bit n: texture map n has a real texture bound (else white)
     u32 pad;
+    // Indirect texturing (offset 336; everything above keeps its offset).
+    u32 tevInd[16];   // BP 0x10-0x1F: indirect command of TEV stage n
+    u32 indMtx[12];   // BP 0x06-0x0E: indirect matrices 0-2, 3 words each; 9-11 unused (0)
+    u32 indScale[2];  // BP 0x25, 0x26: coordinate scale of indirect stages 0/1, 2/3
+    u32 indRef;       // BP 0x27: texmap / texcoord of indirect stages 0-3
+    u32 pad2;
+    // Texcoord n's SU scale - 1 (the texture size GX set for it): S in bits
+    // 0-15 (BP 0x30 + 2n), T in 16-31 (BP 0x31 + 2n). Indirect texturing
+    // works in texels; this turns the normalized coordinates into texels.
+    u32 tcScale[8];
+    // Texture map n's image0 register (BP 0x88-0x8B, 0xA8-0xAB): width - 1
+    // in bits 0-9, height - 1 in 10-19. The Wii size, also for EFB copies
+    // (which are larger on the GPU); turns texels back into normalized.
+    u32 texImage0[8];
 };
+// 33 rows; the shader's reflection reports the same 528 bytes.
+static_assert(sizeof(GXTevUniforms) == 528, "GXTevUniforms must match the HLSL cbuffer");
 
 // --- textures (gx_tex.cpp) ---------------------------------------------------
 //
-// The texture loaded into a texture map (BP 0x80-0xBB), decoded to RGBA8.
-// Decoded images are cached by what the registers describe; after
-// GXInvalidateTexAll (BP 0x66) an image is re-hashed on its next use and
-// re-decoded if its bytes (or its TLUT) changed.
+// The texture loaded into a texture map (BP 0x80-0xBB). Images are tracked
+// by what the registers describe, with a version per content: after
+// GXInvalidateTexAll (BP 0x66) an image is re-hashed on its next use (large
+// ones by a sparse sample, fully every 30 frames) and gets a new version if
+// its bytes (or its TLUT) changed. No pixels are kept: the renderer decodes
+// an image (gx_tex_pixels) only when it uploads a version it lacks.
 struct GXTexDesc {
     // Identifies the image and its contents: a new version means new pixels.
     // Versions are unique across all images.
     u64 key;
     u32 version;
     u32 width, height;
-    // width * height pixels, bytes R, G, B, A, top row first. Valid until the
-    // next gx_tex_get or gx_tex_frame_end call.
-    const u8* rgba;
     // Sampling state from the map's mode registers (it can differ per use of
     // the same image). Wrap: 0 clamp, 1 repeat, 2 mirror.
     u8 wrapS, wrapT;
     u8 minLinear, magLinear;
 };
 
-// Looks up (decoding if needed) the texture in map 0-7. False if the map has
-// no usable texture.
+// Looks up the texture in map 0-7. False if the map has no usable texture.
 bool gx_tex_get(int map, GXTexDesc* out);
+// Decodes the texture in map 0-7 to RGBA8 (width * height pixels, bytes
+// R, G, B, A, top row first). Valid until the next call or
+// gx_tex_frame_end; NULL on failure.
+const u8* gx_tex_pixels(int map);
 // Once per frame: drops images unused for a while and logs statistics.
 void gx_tex_frame_end(void);
 // BP 0x52: an EFB copy. toTexture distinguishes GXCopyTex from GXCopyDisp.

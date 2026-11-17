@@ -191,6 +191,32 @@ Real weather from WiiLink on the 2D screens: first-run date check, region and ci
 - The globe is skipped while `earth.brres` cannot be read (milestone 4): `SimpleModel` has no
   scene model and the globe code checks for it.
 
+### Milestone 4: the globe draws (2026-11-16); texture packs still to do
+The globe renders as on the Wii (frame dumps; not yet compared with Dolphin side by side):
+satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
+- `port/res/brres_swap.cpp`: BRRES (root and folder dictionaries, MDL0 with every structure
+  g3d reads, TEX0 / PLT0 headers) to native byte order at load (`SimpleModel` constructor),
+  idempotent through the byte-order mark. GX display lists, texel / palette data and the shape
+  vertex-descriptor cache stay big-endian (g3d patches DLs byte by byte); vertex arrays are
+  swapped per component, so GX and CPU code read them natively. Animation folders are skipped
+  (earth.brres has none).
+- g3d 64-bit / endian fixes: `ResTexPlttInfoData` pointer slots are `PTR32` (0x34 bytes, assert);
+  `GDSetChanAmbColor` / `GDSetChanMatColor` pack GXColor with `GX_COLOR_AS_U32`; `LC::Lock()`
+  fails on the port so g3d takes the main-memory path instead of the locked cache.
+- `System.cpp` `PortNew`: blocks of 1 MB and up (and anything MEM1 cannot serve) come from
+  `malloc`, so host-side allocations no longer exhaust the 64 MB MEM1.
+- Renderer: indirect texturing in the ubershader (BP 0x06-0x0E, 0x10-0x1F, 0x25-0x27; texel
+  scale from the SU registers, map sizes from image0; alpha bump); emboss texgen and NBT
+  normal decoding in `gx_xform.cpp` / `gx_cp.cpp` (the globe itself uses environment texgens
+  plus an indirect stage, no GX_TG_BUMP); call-display-list addresses are GX addresses.
+- Texture cache: no decoded pixels kept (`gx_tex_pixels` decodes when the backend uploads a new
+  version); large images are checked with a 4 KB sample hash each frame and fully hashed every
+  30 frames (the channel invalidates all textures every frame: 17 MB of hashing a frame -> about
+  1.3 MB).
+- Threads: `OSJoinThread` on a detached thread fails at once, as on the Wii (the WiiConnect24
+  downloader; the exit to the menu deadlocked). `OSReturnToMenu` quits the app (Windows).
+- Input: keys for the Remote's other buttons (`kpad.c`); `FORECAST_BUTTON` for scripted runs.
+
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.
