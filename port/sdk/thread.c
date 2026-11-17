@@ -34,10 +34,12 @@ static PortThread* port_thread(OSThread* t) { return (PortThread*)&t->context; }
 
 static OSThread sMainThread;
 static _Thread_local OSThread* sCurrentThread;
-static _Thread_local int sHostThread;
+static _Thread_local int sHostThread, sGameThread;
 
 void port_mark_host_thread(void) { sHostThread = 1; }
 int port_is_host_thread(void) { return sHostThread; }
+void port_mark_game_thread(void) { sGameThread = 1; }
+int port_is_game_thread(void) { return sGameThread && !sHostThread; }
 
 OSThread* OSGetCurrentThread(void) {
     return sCurrentThread != NULL ? sCurrentThread : &sMainThread;
@@ -52,6 +54,7 @@ static int thread_entry(void* arg) {
     OSThread* t = (OSThread*)arg;
     PortThread* pt = port_thread(t);
     sCurrentThread = t;
+    port_mark_game_thread();
     SDL_SetCurrentThreadPriority(to_sdl_priority(pt->priority));
     pt->result = pt->func(pt->arg);
     SDL_SetAtomicInt(&pt->finished, 1);

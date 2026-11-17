@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include <port_log.h>
+#include <port_mem.h>
 #include <port_import.h>
 #include <port_paths.h>
 #include <port_platform.h>
@@ -57,6 +58,7 @@ void port_stub_hit(const char* name) {
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
+    port_mark_game_thread();
     port_paths_init();
     port_log_open();
     port_log("ForecastOS: Forecast Channel host port (%s, %d-bit)\n", SDL_GetPlatform(), (int)sizeof(void*) * 8);

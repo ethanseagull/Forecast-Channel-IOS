@@ -1862,10 +1862,26 @@ index 4b30a36..b960602 100644
      file.Bind();
      mResMdl = file.GetResMdl(0);
 diff --git a/src/System.cpp b/src/System.cpp
-index 8a3b2b2..1a63fda 100644
+index 8a3b2b2..8f665f3 100644
 --- a/src/System.cpp
 +++ b/src/System.cpp
-@@ -62,9 +62,9 @@ void SystemInit(void) {
+@@ -52,6 +52,15 @@ static BOOL FreeWPAD(void* block);
+ static void PowerCallback(void);
+ static void ResetCallback(void);
+ 
++// The port's threads (and, on iOS, the system's own C++ code, which shares the
++// program's operator new) may reach these heaps from several threads: they lock
++// there. On the Wii nothing else touches them.
++#ifdef FORECAST_PORT
++#define PORT_HEAP_LOCK MEM_HEAP_OPT_CAN_LOCK
++#else
++#define PORT_HEAP_LOCK 0
++#endif
++
+ void SystemInit(void) {
+     Mtx texMtx;
+ 
+@@ -62,9 +71,9 @@ void SystemInit(void) {
  
      {
          void* arenaHi = OSGetMEM1ArenaHi();
@@ -1873,11 +1889,11 @@ index 8a3b2b2..1a63fda 100644
 +        void* heapStart = OSAllocFromMEM1ArenaHi(PTR_ADDR(OSGetMEM1ArenaHi()) - PTR_ADDR(OSGetMEM1ArenaLo()), 32);
  
 -        gMEM1Heap = MEMCreateExpHeapEx(heapStart, (u32)arenaHi - (u32)heapStart, 3);
-+        gMEM1Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3);
++        gMEM1Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3 | PORT_HEAP_LOCK);
      }
      MEMInitAllocatorForExpHeap(&gMEM1Allocator, gMEM1Heap, 4);
      MEMInitAllocatorForExpHeap(&gMEM1Allocator32, gMEM1Heap, 32);
-@@ -72,9 +72,9 @@ void SystemInit(void) {
+@@ -72,9 +81,9 @@ void SystemInit(void) {
  
      {
          void* arenaHi = OSGetMEM2ArenaHi();
@@ -1885,11 +1901,11 @@ index 8a3b2b2..1a63fda 100644
 +        void* heapStart = OSAllocFromMEM2ArenaHi(PTR_ADDR(OSGetMEM2ArenaHi()) - PTR_ADDR(OSGetMEM2ArenaLo()), 32);
  
 -        gMEM2Heap = MEMCreateExpHeapEx(heapStart, (u32)arenaHi - (u32)heapStart, 3);
-+        gMEM2Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3);
++        gMEM2Heap = MEMCreateExpHeapEx(heapStart, PTR_ADDR(arenaHi) - PTR_ADDR(heapStart), 3 | PORT_HEAP_LOCK);
      }
      MEMInitAllocatorForExpHeap(&gMEM2Allocator, gMEM2Heap, 4);
      MEMInitAllocatorForExpHeap(&gMEM2Allocator32, gMEM2Heap, 32);
-@@ -701,9 +701,18 @@ void ChangeScene(u32 scene) {
+@@ -701,9 +710,18 @@ void ChangeScene(u32 scene) {
          leaked = TRUE;
      }
  
@@ -1908,7 +1924,7 @@ index 8a3b2b2..1a63fda 100644
  
      gScene = scene;
      gMEM1FreeSize = MEMGetTotalFreeSizeForExpHeap(gMEM1Heap);
-@@ -898,9 +907,9 @@ void DrawLine(const Vec* start, const Vec* end, u8 width, const GXColor& startCo
+@@ -898,9 +916,9 @@ void DrawLine(const Vec* start, const Vec* end, u8 width, const GXColor& startCo
  
      GXBegin(GX_LINES, GX_VTXFMT0, 2);
      GXPosition3f32(start->x, start->y, start->z);
@@ -1920,7 +1936,7 @@ index 8a3b2b2..1a63fda 100644
      GXEnd();
  }
  
-@@ -1242,6 +1251,73 @@ void MEM2Free(void* block) {
+@@ -1242,6 +1260,74 @@ void MEM2Free(void* block) {
      MEMFreeToExpHeap(gMEM2Heap, block);
  }
  
@@ -1942,9 +1958,10 @@ index 8a3b2b2..1a63fda 100644
 +
 +static void* PortNew(size_t size, s32 align) {
 +    // malloc aligns to 16; larger alignments (the channel's new (-32)) stay in MEM1.
-+    // Port threads (texture loaders, audio) never use the MEM heaps: they are
-+    // not thread-safe. Their blocks come from the C heap (freed by address).
-+    if (gMEM1Heap == NULL || port_is_host_thread() || (size >= PORT_NEW_HOST_MIN && align >= -16 && align <= 16)) {
++    // Only the game's threads (main, OSThreads) allocate from MEM1. Everything
++    // else - port threads, and on iOS the system frameworks' own threads, which
++    // share this operator new - gets the C heap (freed by address).
++    if (gMEM1Heap == NULL || !port_is_game_thread() || (size >= PORT_NEW_HOST_MIN && align >= -16 && align <= 16)) {
 +        return malloc(size != 0 ? size : 1);
 +    }
 +    void* p = MEMAllocFromExpHeapEx(gMEM1Heap, size, align < 16 ? 16 : align);
@@ -1994,7 +2011,7 @@ index 8a3b2b2..1a63fda 100644
  void* operator new(size_t size) {
      return MEMAllocFromExpHeapEx(gMEM1Heap, size, 4);
  }
-@@ -1261,6 +1337,7 @@ void operator delete(void* block) {
+@@ -1261,6 +1347,7 @@ void operator delete(void* block) {
  void operator delete[](void* block) {
      MEMFreeToExpHeap(gMEM1Heap, block);
  }

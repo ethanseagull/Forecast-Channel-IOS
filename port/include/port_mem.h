@@ -42,6 +42,10 @@ int port_mem_readable(const void* p, size_t size);
 // from the C heap: its MEM heaps are not safe to use from several threads.
 void port_mark_host_thread(void);
 int port_is_host_thread(void);
+// The game's threads (the main thread and OSThreads): the only ones whose
+// operator new allocations come from the channel's MEM1 heap.
+void port_mark_game_thread(void);
+int port_is_game_thread(void);
 
 #ifdef __cplusplus
 }
