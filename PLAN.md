@@ -191,7 +191,7 @@ Real weather from WiiLink on the 2D screens: first-run date check, region and ci
 - The globe is skipped while `earth.brres` cannot be read (milestone 4): `SimpleModel` has no
   scene model and the globe code checks for it.
 
-### Milestone 4: the globe draws (2026-11-16); texture packs still to do
+### Milestone 4: done (2026-11-16): the globe and texture packs
 The globe renders as on the Wii (frame dumps; not yet compared with Dolphin side by side):
 satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
 - `port/res/brres_swap.cpp`: BRRES (root and folder dictionaries, MDL0 with every structure
@@ -215,6 +215,13 @@ satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
   1.3 MB).
 - Threads: `OSJoinThread` on a detached thread fails at once, as on the Wii (the WiiConnect24
   downloader; the exit to the menu deadlocked). `OSReturnToMenu` quits the app (Windows).
+- Texture packs (`port/gx/gx_texpack.cpp`): Dolphin-format PNGs anywhere under
+  `<data>/textures/`, named `tex1_<w>x<h>[_m]_<XXH64>[_<palette XXH64>|_$]_<fmt>` exactly as
+  Dolphin's `TextureInfo::CalculateTextureName` computes them (checked against its source in
+  `C:\WiiPC\dolphin-src`). Looked up once per texture version; the backend uploads the PNG
+  (SDL_LoadPNG) at its own size instead of the decoded image. With the user's WiiPC-Forecast and
+  WiiPC-Earth packs installed locally, ~50 textures are replaced in a session, all 28 Earth
+  tiles among them. `FORECAST_NO_TEXPACKS=1` turns them off. DDS packs are not read.
 - Input: keys for the Remote's other buttons (`kpad.c`); `FORECAST_BUTTON` for scripted runs.
 
 Off on the port (each marked in the source):

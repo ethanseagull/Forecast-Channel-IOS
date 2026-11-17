@@ -276,20 +276,37 @@ static void queue_upload(SDL_GPUTexture* tex, const u8* rgba, u32 w, u32 h) {
 static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
     BackendTex& t = sTextures[d.key];
     if (t.tex == NULL || t.version != d.version) {
-        const u8* px = gx_tex_pixels(map);
-        if (px == NULL) {
+        // A texture pack replacement (any size: sampling is normalized), else
+        // the decoded Wii image.
+        SDL_Surface* rep = d.replace >= 0 ? gx_texpack_load(d.replace) : NULL;
+        const u8* px = rep != NULL ? NULL : gx_tex_pixels(map);
+        if (rep == NULL && px == NULL) {
             return NULL;
         }
+        u32 w = rep != NULL ? (u32)rep->w : d.width, h = rep != NULL ? (u32)rep->h : d.height;
         if (t.tex != NULL) {
             sRetired.push_back(t.tex);
         }
-        t.tex = create_texture(d.width, d.height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        t.tex = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
         t.version = d.version;
-        if (t.tex != NULL) {
-            queue_upload(t.tex, px, d.width, d.height);
+        if (t.tex == NULL) {
+            port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)w, (unsigned long)h, SDL_GetError());
+        } else if (rep != NULL) {
+            // Rows may be padded: copy them packed.
+            if ((u32)rep->pitch == w * 4) {
+                queue_upload(t.tex, (const u8*)rep->pixels, w, h);
+            } else {
+                std::vector<u8> packed((size_t)w * h * 4);
+                for (u32 y = 0; y < h; y++) {
+                    memcpy(&packed[(size_t)y * w * 4], (const u8*)rep->pixels + (size_t)y * rep->pitch, (size_t)w * 4);
+                }
+                queue_upload(t.tex, packed.data(), w, h);
+            }
         } else {
-            port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)d.width, (unsigned long)d.height,
-                     SDL_GetError());
+            queue_upload(t.tex, px, w, h);
+        }
+        if (rep != NULL) {
+            SDL_DestroySurface(rep);
         }
     }
     t.lastFrame = sFrame;

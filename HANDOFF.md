@@ -30,12 +30,12 @@ GX code is uncommitted and never drew anything. Copy from it, never edit it.
 
 ## State now (2026-11-16)
 
-- **main**: milestones 1-3 and the globe of milestone 4; `git log` for the
+- **main**: milestones 1-4; `git log` for the
   tip. No remote, nothing pushed.
-- **Milestones 2-4 (globe) done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
+- **Milestones 2-4 done** (`PLAN.md` "Status"). `build\windows\forecast.exe`
   downloads the forecast from WiiLink, runs the first-run setup (date check,
   region, city), shows real weather on the 2D screens and draws the globe
-  (`earth.brres` converted at load), on SDL3 GPU (D3D12), 60 fps, with touch
+  (`earth.brres` converted at load; upscaled texture packs from `<data>/textures`), on SDL3 GPU (D3D12), 60 fps, with touch
   (left mouse) as the Wii pointer and keys for the other Remote buttons
   (- / + zoom, Esc = B, Home). "Back to the Wii Menu" quits. Setup choices
   persist in the data directory, so later runs start in the weather scene.
@@ -103,20 +103,20 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
 1. **`nus_fetch.ps1` embeds the Wii common key.** Before any public push (the
    free macOS runner needs a public repo), make it read the key from a local
    file or prompt for it, and drop it from history (it is in `33cf20c`).
-2. **Rest of milestone 4: the texture packs.** Load the upscaled Dolphin-format
-   packs (`C:\WiiPC\textures-png-backup\WiiPC-Forecast` and `...\WiiPC-Earth`):
-   compute Dolphin's texture hash (`tex1_<w>x<h>_<hash>_<fmt>` names) in
-   `gx_tex.cpp` and let the backend upload the PNG instead of the decoded
-   image. Also still to compare with Dolphin (same WiiLink-patched channel):
-   the globe's emboss and water (indirect texturing and the emboss/env
-   texgens are implemented but only judged by eye), and the left part of the
-   forecast pages' title belt, which looked empty in dumps.
+2. **Milestone 4 loose ends.** Compare with Dolphin (same WiiLink-patched
+   channel): the globe's water and relief shading (indirect texturing and
+   environment texgens, judged by eye only), and the left part of the forecast
+   pages' title belt, which looked empty in dumps. Texture packs load on the
+   main thread when a texture first appears: the first seconds run at ~43 fps
+   while the 2048x2048 Earth PNGs decode; load them on a worker thread (draw
+   the original until the replacement is ready).
    Renderer gaps that log once if used: fog, z textures, EFB-copy format
    conversion, logic ops, the indirect "unmodified texcoord for LOD" bit
    (textures have 1 mip level).
    Memory: decoded images are no longer kept (the backend decodes when it
    uploads); the globe's 28 1024x1024 tiles are about 120 MB of RGBA8 on the
-   GPU. iOS will want a compressed GPU format (BC1/ASTC from CMPR) or fewer tiles.
+   GPU, and with the Earth pack (2048x2048) about 470 MB. iOS will want a
+   compressed GPU format (BC1/ASTC) or smaller tiles there.
 3. **Rest of `notes/64bit-audit.md`.** PAT0 bind arrays (no PAT0 in
    earth.brres; only if another file needs them); snd TaskManager unit size (with sound); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef

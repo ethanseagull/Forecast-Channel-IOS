@@ -251,6 +251,7 @@ struct TexEntry {
     u32 lastFrame = 0;
     u32 version = 0; // 0: new
     u32 w = 0, h = 0;
+    s32 replace = -1; // texture pack replacement of this version
 };
 
 // Node-based: entries stay put when others are added.
@@ -406,6 +407,13 @@ u64 sample_hash(const MapInfo& m) {
     return hash;
 }
 
+// Dolphin names a texture "_m" when its sampler's mipmap filter is on (min
+// filter bits 5-6 of mode0).
+s32 pack_lookup(const MapInfo& m) {
+    bool mipmaps = gx_bits(m.mode0, 5, 2) != 0;
+    return gx_texpack_lookup(m.fmt, m.w, m.h, mipmaps, m.src, m.size, m.pal, m.entries);
+}
+
 } // namespace
 
 void gx_tex_invalidate(void) {
@@ -426,6 +434,7 @@ bool gx_tex_get(int map, GXTexDesc* out) {
         e.w = m.w;
         e.h = m.h;
         e.version = next_version();
+        e.replace = pack_lookup(m);
     } else if (e.epoch != sEpoch) {
         // Textures in memory may have changed since the last check.
         bool full = true;
@@ -440,6 +449,7 @@ bool gx_tex_get(int map, GXTexDesc* out) {
             if (hash != e.hash) {
                 e.hash = hash;
                 e.version = next_version();
+                e.replace = pack_lookup(m);
             }
         }
     }
@@ -460,6 +470,7 @@ bool gx_tex_get(int map, GXTexDesc* out) {
     // (GX2HWFiltConv: NEAR 0, NEAR_MIP_NEAR 1, NEAR_MIP_LIN 2, LINEAR 4,
     // LIN_MIP_NEAR 5, LIN_MIP_LIN 6): its top bit is the base filter.
     out->minLinear = (u8)gx_bits(m.mode0, 7, 1);
+    out->replace = e.replace;
     return true;
 }
 

@@ -183,7 +183,20 @@ struct GXTexDesc {
     // the same image). Wrap: 0 clamp, 1 repeat, 2 mirror.
     u8 wrapS, wrapT;
     u8 minLinear, magLinear;
+    // A texture pack replacement for this version (gx_texpack_load), or -1.
+    s32 replace;
 };
+
+// --- texture packs (gx_texpack.cpp) ------------------------------------------
+
+struct SDL_Surface;
+// Looks a texture up in the packs under <data>/textures by its Dolphin name
+// (computed from the texel bytes, and the used palette for CI formats).
+// Returns a replacement id or -1.
+s32 gx_texpack_lookup(u32 fmt, u32 w, u32 h, bool mipmaps, const u8* texels, u32 size, const u8* pal,
+                      u32 palEntries);
+// Loads a replacement as RGBA8 (bytes R, G, B, A). The caller destroys it.
+SDL_Surface* gx_texpack_load(s32 id);
 
 // Looks up the texture in map 0-7. False if the map has no usable texture.
 bool gx_tex_get(int map, GXTexDesc* out);

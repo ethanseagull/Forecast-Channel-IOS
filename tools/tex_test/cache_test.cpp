@@ -50,6 +50,11 @@ static void bind(int map, u32 addr, u32 fmt, u32 w, u32 h, u32 mode0 = 0, u32 mo
     gx.bp[b + 0x18] = tlut;
 }
 
+// No texture packs in this test.
+s32 gx_texpack_lookup(u32, u32, u32, bool, const u8*, u32, const u8*, u32) {
+    return -1;
+}
+
 int main() {
     static u8 tmem[0x80000];
     gx.tmemHi = tmem;
