@@ -149,7 +149,7 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from
      scratch). Answer (2026-11-17): the full .ipa carries the channel files and texture packs in
      its bundle (`channel/`, `textures/`; the app reads them there when Documents has none).
-     `.	ools\pack_data.ps1 -Upload` packs HAFE_v7 and the packs (compressed by
+     `.\tools\pack_data.ps1 -Upload` packs HAFE_v7 and the packs (compressed by
      `tools/texpack_compress`: BC1 .dds where the app compresses anyway; the Earth pack 142 ->
      34 MB in the .ipa) into `forecast-data.zip`, the asset of the private repo's "data"
      release; the iOS workflow bundles it when it is there. Never make that release or the .ipa
