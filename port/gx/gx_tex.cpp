@@ -470,6 +470,7 @@ bool gx_tex_get(int map, GXTexDesc* out) {
     // (GX2HWFiltConv: NEAR 0, NEAR_MIP_NEAR 1, NEAR_MIP_LIN 2, LINEAR 4,
     // LIN_MIP_NEAR 5, LIN_MIP_LIN 6): its top bit is the base filter.
     out->minLinear = (u8)gx_bits(m.mode0, 7, 1);
+    out->format = (u8)m.fmt;
     out->replace = e.replace;
     return true;
 }
@@ -483,6 +484,44 @@ const u8* gx_tex_pixels(int map) {
     if (!gx_tex_decode(m.fmt, m.src, m.w, m.h, m.pal, m.tlutFmt, sPixels.data())) {
         return nullptr;
     }
+    sDecoded++;
+    sDecodedBytes += sPixels.size();
+    return sPixels.data();
+}
+
+// CMPR is DXT1 in a Wii layout: 8x8 tiles of four 4x4 sub-blocks (top-left,
+// top-right, bottom-left, bottom-right), colours big-endian, and the 2-bit
+// indices of each row packed from the most significant bits. BC1 stores the
+// same blocks in raster order with little-endian colours and each row's
+// indices from the least significant bits. (The Wii blends the 4-colour
+// mode's middle colours 5/8 : 3/8, BC1 1/3 : 2/3; the difference is small.)
+const u8* gx_tex_bc1(int map, u32* blocksW, u32* blocksH) {
+    MapInfo m;
+    if (!resolve(map, &m) || m.fmt != GX_TEXFMT_CMPR || (m.w & 3) != 0 || (m.h & 3) != 0) {
+        return nullptr;
+    }
+    u32 bw = m.w / 4, bh = m.h / 4;
+    u32 tilesW = (m.w + 7) / 8;
+    sPixels.resize((size_t)bw * bh * 8);
+    for (u32 by = 0; by < bh; by++) {
+        for (u32 bx = 0; bx < bw; bx++) {
+            u32 tile = (by / 2) * tilesW + (bx / 2);
+            u32 sub = (by & 1) * 2 + (bx & 1);
+            const u8* s = m.src + (size_t)tile * 32 + sub * 8;
+            u8* d = &sPixels[((size_t)by * bw + bx) * 8];
+            d[0] = s[1];
+            d[1] = s[0];
+            d[2] = s[3];
+            d[3] = s[2];
+            for (int row = 0; row < 4; row++) {
+                u8 v = s[4 + row];
+                // Reverse the four 2-bit fields: pixel 0 moves to bits 0-1.
+                d[4 + row] = (u8)((v >> 6) | ((v >> 2) & 0x0C) | ((v << 2) & 0x30) | (v << 6));
+            }
+        }
+    }
+    *blocksW = bw;
+    *blocksH = bh;
     sDecoded++;
     sDecodedBytes += sPixels.size();
     return sPixels.data();

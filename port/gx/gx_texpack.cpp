@@ -15,6 +15,7 @@
 
 #include "gx_internal.h"
 #include "gx_tex_decode.h"
+#include "gx_texcodec.h"
 #include <port_log.h>
 #include <port_paths.h>
 
@@ -225,10 +226,30 @@ const int kWorkers = 2;
 SDL_Mutex* sLock;
 SDL_Condition* sWake;
 std::vector<std::pair<s32, std::string>> sQueue; // (id, path) waiting for a worker
-std::unordered_map<s32, SDL_Surface*> sReady;     // decoded, not yet taken
-std::unordered_map<s32, bool> sInFlight;          // queued or being decoded
+std::unordered_map<s32, GXPackImage*> sReady;    // loaded, not yet taken
+std::unordered_map<s32, bool> sInFlight;         // queued or being decoded
+SDL_AtomicInt sComp;                             // GX_TEXCOMP_*
+SDL_AtomicInt sCompressed;                       // statistics
 
-SDL_Surface* load_png(const std::string& path) {
+// Images at least this large, a multiple of 4 in both directions and with no
+// soft alpha are compressed (to BC1) when the GPU takes compressed formats.
+const u32 kCompressMin = 256;
+
+// True if every alpha value is (close to) 0 or 255: BC1's 1-bit alpha keeps it.
+bool binary_alpha(const SDL_Surface* s) {
+    for (int y = 0; y < s->h; y++) {
+        const u8* row = (const u8*)s->pixels + (size_t)y * s->pitch;
+        for (int x = 0; x < s->w; x++) {
+            u8 a = row[x * 4 + 3];
+            if (a > 8 && a < 247) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+GXPackImage* load_png(const std::string& path) {
     SDL_Surface* s = SDL_LoadPNG(path.c_str());
     if (s == nullptr) {
         port_log("texpack: cannot load %s: %s\n", path.c_str(), SDL_GetError());
@@ -237,7 +258,27 @@ SDL_Surface* load_png(const std::string& path) {
     // Bytes R, G, B, A in memory, as the GPU texture expects.
     SDL_Surface* rgba = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ABGR8888);
     SDL_DestroySurface(s);
-    return rgba;
+    if (rgba == nullptr) {
+        return nullptr;
+    }
+    GXPackImage* img = new GXPackImage;
+    img->w = (u32)rgba->w;
+    img->h = (u32)rgba->h;
+    img->bc1 = SDL_GetAtomicInt(&sComp) != GX_TEXCOMP_NONE && img->w >= kCompressMin && img->h >= kCompressMin &&
+               (img->w & 3) == 0 && (img->h & 3) == 0 && binary_alpha(rgba);
+    if (img->bc1) {
+        img->data.resize((size_t)(img->w / 4) * (img->h / 4) * 8);
+        gx_bc1_encode((const u8*)rgba->pixels, img->w, img->h, (u32)rgba->pitch, img->data.data());
+        SDL_AddAtomicInt(&sCompressed, 1);
+    } else {
+        img->data.resize((size_t)img->w * img->h * 4);
+        for (u32 y = 0; y < img->h; y++) {
+            memcpy(&img->data[(size_t)y * img->w * 4], (const u8*)rgba->pixels + (size_t)y * rgba->pitch,
+                   (size_t)img->w * 4);
+        }
+    }
+    SDL_DestroySurface(rgba);
+    return img;
 }
 
 int SDLCALL worker(void* unused) {
@@ -252,12 +293,12 @@ int SDLCALL worker(void* unused) {
         sQueue.erase(sQueue.begin());
         SDL_UnlockMutex(sLock);
 
-        SDL_Surface* s = load_png(path);
+        GXPackImage* img = load_png(path);
 
         SDL_LockMutex(sLock);
         sInFlight.erase(id);
-        if (s != nullptr) {
-            sReady[id] = s;
+        if (img != nullptr) {
+            sReady[id] = img;
         }
         SDL_UnlockMutex(sLock);
     }
@@ -279,6 +320,10 @@ void start_workers(void) {
 
 } // namespace
 
+void gx_texpack_set_compression(int comp) {
+    SDL_SetAtomicInt(&sComp, comp);
+}
+
 void gx_texpack_request(s32 id) {
     if (id < 0 || (size_t)id >= sPaths.size()) {
         return;
@@ -295,17 +340,17 @@ void gx_texpack_request(s32 id) {
     SDL_UnlockMutex(sLock);
 }
 
-SDL_Surface* gx_texpack_take(s32 id) {
+GXPackImage* gx_texpack_take(s32 id) {
     if (sLock == nullptr) {
         return nullptr;
     }
-    SDL_Surface* s = nullptr;
+    GXPackImage* img = nullptr;
     SDL_LockMutex(sLock);
     auto it = sReady.find(id);
     if (it != sReady.end()) {
-        s = it->second;
+        img = it->second;
         sReady.erase(it);
     }
     SDL_UnlockMutex(sLock);
-    return s;
+    return img;
 }

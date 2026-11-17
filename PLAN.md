@@ -245,6 +245,20 @@ satellite Earth, ocean, atmosphere rim, stars, city labels; zoom with - / +.
 - `OSReturnToMenu` releases the interrupts lock before stopping the audio thread (exiting could
   deadlock against the frame thread).
 
+### Texture compression (2026-11-16)
+GPU texture memory on the globe: 123 MB -> 22 MB (BC1), 497 MB -> 98 MB with the 2x Earth pack.
+- CMPR textures go to the GPU compressed: as BC1 (`gx_tex_bc1`: the Wii's DXT1 blocks reordered,
+  no re-encoding) where BC1 works, else as ASTC 4x4 transcoded block for block from BC1
+  (`port/gx/gx_texcodec.cpp`). iOS prefers ASTC: BC support on iPhones is unreliable (reported but
+  drawn black on some). Choice logged at start; `FORECAST_TEXCOMP=none|bc1|astc` overrides.
+- Pack PNGs of 256x256 and up with no soft alpha are encoded to BC1 on the loader threads
+  (~0.2 s per 2048x2048), then uploaded like CMPR. Smaller or soft-alpha images stay RGBA8.
+- ASTC: 4-colour BC1 blocks -> CEM 8, 2-bit weights (1/3, 2/3 become 21/64, 43/64); 3-colour
+  -> trit weights (exact); with transparency -> dual-plane CEM 12; solid -> void extent. Within
+  0.1 dB of BC1 on the real textures; checked only against an independent decoder written from
+  the spec (`tools/texcodec_test`), not on an ASTC GPU yet.
+- The log's frame line reports resident texture memory.
+
 Off on the port (each marked in the source):
 - Cursor: no cursor is drawn (touchscreens). The sparkle effects were never loaded, and the
   plain hand texture (`Cursor::Set` type 5) is skipped under `FORECAST_PORT`.

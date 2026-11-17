@@ -123,9 +123,9 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
    earth.brres; only if another file needs them); make
    `port_gx_addr` assert on stack / C-heap pointers in debug builds. The ef
    items are moot (cursor effect dropped).
-4. **Texture compression for iOS** (in progress): CMPR -> BC1 where BC1 works,
-   BC1 -> ASTC 4x4 on iOS (BC is unreliable on iPhones), large opaque pack PNGs
-   -> BC1 on the loader threads. Sound was checked by ear: it sounds right.
+4. **Texture compression: check ASTC on an iPhone** (milestone 6). The GPU-side
+   ASTC path cannot run on this PC (no ASTC on desktop GPUs); its blocks were
+   verified against an independent decoder (`tools/texcodec_test`). BC1 runs here.
 5. **iOS** (milestone 6): CMake Xcode generator on a GitHub Actions macOS
    runner, unsigned .ipa artifact, SDL touch events into the same pointer path
    as the mouse, Files-app import of the channel contents, ATS exception for

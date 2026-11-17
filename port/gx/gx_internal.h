@@ -183,7 +183,9 @@ struct GXTexDesc {
     // the same image). Wrap: 0 clamp, 1 repeat, 2 mirror.
     u8 wrapS, wrapT;
     u8 minLinear, magLinear;
-    // A texture pack replacement for this version (gx_texpack_load), or -1.
+    // The Wii texture format (GX_TEXFMT_*, gx_tex_decode.h).
+    u8 format;
+    // A texture pack replacement for this version (gx_texpack_request), or -1.
     s32 replace;
 };
 
@@ -195,12 +197,25 @@ struct SDL_Surface;
 // Returns a replacement id or -1.
 s32 gx_texpack_lookup(u32 fmt, u32 w, u32 h, bool mipmaps, const u8* texels, u32 size, const u8* pal,
                       u32 palEntries);
+// GPU texture compression the backend uses (gx_sdl.cpp choose_texcomp).
+enum { GX_TEXCOMP_NONE, GX_TEXCOMP_BC1, GX_TEXCOMP_ASTC };
+// Tells the pack loader whether to compress large opaque images (to BC1;
+// the backend transcodes BC1 to ASTC where that is the GPU format).
+void gx_texpack_set_compression(int comp);
+
+// A loaded replacement: RGBA8 (bytes R, G, B, A, packed rows) or, if bc1,
+// BC1 blocks of a w x h image (w, h multiples of 4).
+struct GXPackImage {
+    u32 w, h;
+    bool bc1;
+    std::vector<u8> data;
+};
 // Queues a replacement for loading on a worker thread (no-op if it is
 // already queued or loaded).
 void gx_texpack_request(s32 id);
-// The replacement as RGBA8 (bytes R, G, B, A) once a worker has decoded it,
-// else NULL. The caller takes ownership and destroys it.
-SDL_Surface* gx_texpack_take(s32 id);
+// The replacement once a worker has loaded it, else NULL. The caller takes
+// ownership (delete).
+GXPackImage* gx_texpack_take(s32 id);
 
 // Looks up the texture in map 0-7. False if the map has no usable texture.
 bool gx_tex_get(int map, GXTexDesc* out);
@@ -208,6 +223,10 @@ bool gx_tex_get(int map, GXTexDesc* out);
 // R, G, B, A, top row first). Valid until the next call or
 // gx_tex_frame_end; NULL on failure.
 const u8* gx_tex_pixels(int map);
+// For a CMPR texture whose size is a multiple of 4: its blocks as BC1
+// (gx_texcodec.h layout), blocksW x blocksH, row by row; else NULL. Valid
+// until the next gx_tex_pixels / gx_tex_bc1 call or gx_tex_frame_end.
+const u8* gx_tex_bc1(int map, u32* blocksW, u32* blocksH);
 // Once per frame: drops images unused for a while and logs statistics.
 void gx_tex_frame_end(void);
 // BP 0x52: an EFB copy. toTexture distinguishes GXCopyTex from GXCopyDisp.

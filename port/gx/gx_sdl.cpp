@@ -17,6 +17,8 @@
 #include <SDL3/SDL.h>
 
 #include "gx_internal.h"
+#include "gx_tex_decode.h"
+#include "gx_texcodec.h"
 #include "shaders/gx_shaders_dxil.h"
 #include <port_log.h>
 #include <port_platform.h>
@@ -236,6 +238,7 @@ struct BackendTex {
     SDL_GPUTexture* tex;
     u32 lastFrame;
     s32 waiting = -1; // texture pack replacement still being loaded
+    u64 bytes = 0;    // GPU memory of tex
 };
 
 struct PendingUpload {
@@ -262,51 +265,140 @@ static SDL_GPUTexture* create_texture(u32 w, u32 h, SDL_GPUTextureFormat fmt, SD
     return SDL_CreateGPUTexture(sDev, &ti);
 }
 
-static void queue_upload(SDL_GPUTexture* tex, const u8* rgba, u32 w, u32 h) {
+// Queues `bytes` of texel data (RGBA8 rows or compressed blocks, packed) for
+// a w x h texture.
+static void queue_upload_bytes(SDL_GPUTexture* tex, const u8* data, size_t bytes, u32 w, u32 h) {
     PendingUpload u;
     u.tex = tex;
     u.offset = (u32)sUploadBytes.size();
     u.w = w;
     u.h = h;
-    sUploadBytes.insert(sUploadBytes.end(), rgba, rgba + (size_t)w * h * 4);
+    sUploadBytes.insert(sUploadBytes.end(), data, data + bytes);
     sUploads.push_back(u);
 }
 
-// The GPU copy of the texture in map `map` (described by d), uploading the
-// version the GPU lacks.
-// Replaces t's GPU texture with a new one holding w x h RGBA8 pixels (rows
-// pitch bytes apart).
-static void replace_gpu_texture(BackendTex& t, const u8* px, u32 w, u32 h, u32 pitch) {
-    if (t.tex != NULL) {
-        sRetired.push_back(t.tex);
+static void queue_upload(SDL_GPUTexture* tex, const u8* rgba, u32 w, u32 h) {
+    queue_upload_bytes(tex, rgba, (size_t)w * h * 4, w, h);
+}
+
+// --- compressed textures ----------------------------------------------------------
+//
+// GPU memory: the globe's 28 CMPR tiles are 112 MB as RGBA8 (448 MB with the
+// 2x texture pack). CMPR is DXT1, so where BC1 works (PCs, Macs) it is
+// uploaded as BC1 unchanged (4 bits a pixel); where it does not (iPhones:
+// BC support there is unreliable) its blocks are transcoded to ASTC 4x4
+// (8 bits a pixel). Large opaque pack images are encoded the same way on the
+// loader threads. FORECAST_TEXCOMP=none|bc1|astc overrides the choice.
+
+static int sTexComp = GX_TEXCOMP_NONE;
+static u64 sTexBytes; // size of the texture last created by upload_*
+static std::vector<u8> sAstcScratch;
+
+static void choose_texcomp(void) {
+    bool bc1 = SDL_GPUTextureSupportsFormat(sDev, SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM, SDL_GPU_TEXTURETYPE_2D,
+                                            SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    bool astc = SDL_GPUTextureSupportsFormat(sDev, SDL_GPU_TEXTUREFORMAT_ASTC_4x4_UNORM, SDL_GPU_TEXTURETYPE_2D,
+                                             SDL_GPU_TEXTUREUSAGE_SAMPLER);
+#ifdef SDL_PLATFORM_IOS
+    // Reported as supported on some iPhones yet drawn black: prefer ASTC.
+    if (astc) {
+        bc1 = false;
     }
-    t.tex = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    if (t.tex == NULL) {
+#endif
+    sTexComp = bc1 ? GX_TEXCOMP_BC1 : astc ? GX_TEXCOMP_ASTC : GX_TEXCOMP_NONE;
+    const char* force = SDL_getenv("FORECAST_TEXCOMP");
+    if (force != NULL) {
+        if (SDL_strcmp(force, "none") == 0) {
+            sTexComp = GX_TEXCOMP_NONE;
+        } else if (SDL_strcmp(force, "bc1") == 0 && bc1) {
+            sTexComp = GX_TEXCOMP_BC1;
+        } else if (SDL_strcmp(force, "astc") == 0 && astc) {
+            sTexComp = GX_TEXCOMP_ASTC;
+        } else {
+            port_log("gx: FORECAST_TEXCOMP=%s not available here\n", force);
+        }
+    }
+    static const char* const names[] = {"none (RGBA8)", "BC1", "ASTC 4x4"};
+    port_log("gx: texture compression: %s (BC1 %s, ASTC %s)\n", names[sTexComp], bc1 ? "yes" : "no",
+             astc ? "yes" : "no");
+    gx_texpack_set_compression(sTexComp);
+}
+
+// Uploads BC1 blocks (bw x bh) as the device's compressed format.
+static SDL_GPUTexture* upload_bc1(const u8* bc1, u32 bw, u32 bh) {
+    u32 w = bw * 4, h = bh * 4;
+    size_t blocks = (size_t)bw * bh;
+    if (sTexComp == GX_TEXCOMP_BC1) {
+        SDL_GPUTexture* t = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_BC1_RGBA_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        if (t != NULL) {
+            queue_upload_bytes(t, bc1, blocks * 8, w, h);
+            sTexBytes = blocks * 8;
+        }
+        return t;
+    }
+    sAstcScratch.resize(blocks * 16);
+    gx_bc1_to_astc4x4(bc1, blocks, sAstcScratch.data());
+    SDL_GPUTexture* t = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_ASTC_4x4_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    if (t != NULL) {
+        queue_upload_bytes(t, sAstcScratch.data(), blocks * 16, w, h);
+        sTexBytes = blocks * 16;
+    }
+    return t;
+}
+
+// A new RGBA8 texture holding w x h pixels (rows pitch bytes apart).
+static SDL_GPUTexture* upload_rgba(const u8* px, u32 w, u32 h, u32 pitch) {
+    SDL_GPUTexture* t = create_texture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    if (t == NULL) {
         port_log("gx: texture %lux%lu failed: %s\n", (unsigned long)w, (unsigned long)h, SDL_GetError());
     } else if (pitch == w * 4) {
-        queue_upload(t.tex, px, w, h);
+        queue_upload(t, px, w, h);
     } else {
         // Padded rows: copy them packed.
         std::vector<u8> packed((size_t)w * h * 4);
         for (u32 y = 0; y < h; y++) {
             memcpy(&packed[(size_t)y * w * 4], px + (size_t)y * pitch, (size_t)w * 4);
         }
-        queue_upload(t.tex, packed.data(), w, h);
+        queue_upload(t, packed.data(), w, h);
     }
+    if (t != NULL) {
+        sTexBytes = (u64)w * h * 4;
+    }
+    return t;
+}
+
+static void set_gpu_texture(BackendTex& t, SDL_GPUTexture* tex) {
+    if (t.tex != NULL) {
+        sRetired.push_back(t.tex);
+    }
+    t.tex = tex;
+    t.bytes = sTexBytes;
 }
 
 // The GPU copy of the texture in map `map` (described by d), uploading the
-// version the GPU lacks. A texture pack replacement is loaded on a worker
-// thread: the decoded Wii image is drawn until it arrives, then swapped for
-// it (any size: sampling is normalized).
+// version the GPU lacks: CMPR as BC1 / ASTC where available, the rest as
+// RGBA8. A texture pack replacement is loaded on a worker thread: the Wii
+// image is drawn until it arrives, then swapped for it (any size: sampling
+// is normalized).
 static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
     BackendTex& t = sTextures[d.key];
     if (t.tex == NULL || t.version != d.version) {
-        const u8* px = gx_tex_pixels(map);
-        if (px == NULL) {
-            return NULL;
+        SDL_GPUTexture* nt = NULL;
+        if (sTexComp != GX_TEXCOMP_NONE && d.format == GX_TEXFMT_CMPR) {
+            u32 bw, bh;
+            const u8* bc1 = gx_tex_bc1(map, &bw, &bh);
+            if (bc1 != NULL) {
+                nt = upload_bc1(bc1, bw, bh);
+            }
         }
-        replace_gpu_texture(t, px, d.width, d.height, d.width * 4);
+        if (nt == NULL) {
+            const u8* px = gx_tex_pixels(map);
+            if (px == NULL) {
+                return NULL;
+            }
+            nt = upload_rgba(px, d.width, d.height, d.width * 4);
+        }
+        set_gpu_texture(t, nt);
         t.version = d.version;
         t.waiting = d.replace;
         if (d.replace >= 0) {
@@ -314,10 +406,14 @@ static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
         }
     }
     if (t.waiting >= 0) {
-        SDL_Surface* rep = gx_texpack_take(t.waiting);
-        if (rep != NULL) {
-            replace_gpu_texture(t, (const u8*)rep->pixels, (u32)rep->w, (u32)rep->h, (u32)rep->pitch);
-            SDL_DestroySurface(rep);
+        GXPackImage* img = gx_texpack_take(t.waiting);
+        if (img != NULL) {
+            SDL_GPUTexture* nt = img->bc1 ? upload_bc1(img->data.data(), img->w / 4, img->h / 4)
+                                          : upload_rgba(img->data.data(), img->w, img->h, img->w * 4);
+            if (nt != NULL) {
+                set_gpu_texture(t, nt);
+            }
+            delete img;
             t.waiting = -1;
         }
     }
@@ -773,9 +869,15 @@ extern "C" void port_gx_present(void) {
 
     sFrame++;
     if (sFrame <= 3 || sFrame % 600 == 0) {
-        port_log("gx: frame %lu: %lu draws, %lu vertices, %lu texture uploads, %lu pipelines, %lu EFB copies\n",
+        u64 texBytes = 0;
+        for (const auto& kv : sTextures) {
+            texBytes += kv.second.bytes;
+        }
+        port_log("gx: frame %lu: %lu draws, %lu vertices, %lu texture uploads, %lu pipelines, %lu EFB copies, "
+                 "%lu textures in %lu KB\n",
                  (unsigned long)sFrame, (unsigned long)sFrameDraws, (unsigned long)sFrameVerts,
-                 (unsigned long)sFrameUploads, (unsigned long)sPipelines.size(), (unsigned long)sEfbCopies.size());
+                 (unsigned long)sFrameUploads, (unsigned long)sPipelines.size(), (unsigned long)sEfbCopies.size(),
+                 (unsigned long)sTextures.size(), (unsigned long)(texBytes / 1024));
     }
     sFrameDraws = sFrameVerts = sFrameUploads = 0;
     // The EFB is resized only between frames.
@@ -903,6 +1005,7 @@ extern "C" void port_gx_backend_init(void) {
     }
     port_log("gx: SDL GPU backend %s%s\n", SDL_GetGPUDeviceDriver(sDev), debug ? " (debug layer)" : "");
 
+    choose_texcomp();
     sDepthFmt = SDL_GPUTextureSupportsFormat(sDev, SDL_GPU_TEXTUREFORMAT_D24_UNORM, SDL_GPU_TEXTURETYPE_2D,
                                              SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
                     ? SDL_GPU_TEXTUREFORMAT_D24_UNORM
