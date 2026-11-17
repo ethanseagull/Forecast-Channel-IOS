@@ -27,6 +27,17 @@ bool port_platform_init(void) {
         port_log("SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+#ifdef SDL_PLATFORM_IOS
+    // Portrait or landscape is decided when the app starts, by how the phone
+    // is held: the layouts are placed once, as they load (port/channel/
+    // portrait.cpp). The app then keeps that orientation.
+    {
+        SDL_DisplayOrientation o = SDL_GetCurrentDisplayOrientation(SDL_GetPrimaryDisplay());
+        bool upright = o == SDL_ORIENTATION_PORTRAIT || o == SDL_ORIENTATION_PORTRAIT_FLIPPED;
+        SDL_SetHint(SDL_HINT_ORIENTATIONS, upright ? "Portrait" : "LandscapeLeft LandscapeRight");
+        port_log("display orientation %d: %s\n", (int)o, upright ? "portrait" : "landscape");
+    }
+#endif
     // 16:9 at twice the Wii's 608-wide safe frame; resizable.
     // FORECAST_HIDDEN=1 (automated test runs): no visible window; frames are
     // still rendered (and can be dumped with FORECAST_DUMP_FRAME).
@@ -211,9 +222,92 @@ void port_perf_add(int bucket, uint64_t ns) {
 #define DISPLAY_ASPECT (16.0f / 9.0f)
 #define FILL_ASPECT (21.0f / 9.0f)
 
+// Portrait: whether it is on, the canvas request for the frame being drawn
+// and the way the last frame was shown.
+static int sPortraitOn = -1;
+static bool sCanvasRequest, sCanvasShown;
+
+static bool portrait_window(float width, float height) {
+    if (sPortraitOn < 0) {
+        const char* p = SDL_getenv("FORECAST_PORTRAIT");
+        sPortraitOn = p != NULL && p[0] == '0' ? 0 : 1;
+    }
+    return sPortraitOn && height > width;
+}
+
+void port_portrait_canvas(void) { sCanvasRequest = true; }
+
+bool port_portrait_take_canvas(void) {
+    bool c = sCanvasRequest;
+    sCanvasRequest = false;
+    return c;
+}
+
+void port_portrait_presented(bool canvas) { sCanvasShown = canvas; }
+
+static uint32_t sPagesFrame;
+void port_portrait_pages(void) { sPagesFrame = sFrame + 1; }
+bool port_portrait_pages_showing(void) { return sPagesFrame != 0 && sFrame + 1 - sPagesFrame <= 2; }
+
+// Safe-area insets in window units: top and bottom. Windows has none;
+// FORECAST_SAFE_AREA=top,bottom (window units, e.g. 59,34 for an iPhone 15
+// Pro held upright) simulates them.
+static void safe_insets(float* top, float* bottom) {
+    *top = *bottom = 0.0f;
+    const char* e = SDL_getenv("FORECAST_SAFE_AREA");
+    if (e != NULL && SDL_sscanf(e, "%f,%f", top, bottom) == 2) {
+        return;
+    }
+    int ww = 0, wh = 0;
+    SDL_Rect safe;
+    if (sWindow != NULL && SDL_GetWindowSize(sWindow, &ww, &wh) && SDL_GetWindowSafeArea(sWindow, &safe) &&
+        safe.h > 0) {
+        *top = (float)safe.y;
+        *bottom = (float)(wh - (safe.y + safe.h));
+    }
+}
+
+void port_portrait(PortPortrait* p) {
+    SDL_zerop(p);
+    int ww = 0, wh = 0;
+    if (sWindow == NULL || !SDL_GetWindowSize(sWindow, &ww, &wh) || !portrait_window((float)ww, (float)wh)) {
+        return;
+    }
+    // The frame in the canvas: as high as the window is wide, 16:9.
+    float fh = (float)ww, fw = fh * (16.0f / 9.0f);
+    float halfW = 832.0f * (float)ww / fw * 0.5f, halfH = 456.0f * (float)wh / fh * 0.5f;
+    p->active = true;
+    p->left = 416.0f - halfW;
+    p->right = 416.0f + halfW;
+    p->top = 228.0f - halfH;
+    p->bottom = 228.0f + halfH;
+    float top, bottom;
+    safe_insets(&top, &bottom);
+    p->safeTop = top * 456.0f / fh;
+    p->safeBottom = bottom * 456.0f / fh;
+}
+
 void port_display_layout(float width, float height, PortDisplay* d) {
     SDL_zerop(d);
     if (width <= 0.0f || height <= 0.0f) {
+        return;
+    }
+    if (portrait_window(width, height)) {
+        d->portrait = true;
+        d->canvas = sCanvasShown;
+        if (d->canvas) {
+            // The frame at its landscape size, centred; wider than the screen.
+            d->h = width;
+            d->w = width * (16.0f / 9.0f);
+            d->x = (width - d->w) * 0.5f;
+            d->y = (height - d->h) * 0.5f;
+            return;
+        }
+        // Letterboxed: the 16:9 frame as wide as the screen, centred.
+        d->w = width;
+        d->h = width * (9.0f / 16.0f);
+        d->x = 0.0f;
+        d->y = (height - d->h) * 0.5f;
         return;
     }
     // The safe area's horizontal extent, scaled to the drawable's units.

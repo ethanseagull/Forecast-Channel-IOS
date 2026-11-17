@@ -24,6 +24,37 @@ index e32f7fc..db0fb3d 100644
  }
  
  // Textured dots on the globe, one triangle per location. They fade out while the globe is moving.
+diff --git a/include/channel/LayoutButton.h b/include/channel/LayoutButton.h
+index ff8e8d9..3fe00f4 100644
+--- a/include/channel/LayoutButton.h
++++ b/include/channel/LayoutButton.h
+@@ -163,6 +163,12 @@ public:
+     void SetPaneAlpha(s32 alpha);
+     void SetViewMtx(const nw4r::math::MTX34& mtx);
+     void SetSlideOffset(f32 offset);
++#ifdef FORECAST_PORT
++    // Portrait: moves the layout's panes to their places on the canvas
++    // (port/channel/portrait.cpp) and remakes the buttons, which measured
++    // them. Call right after construction, before FindButton.
++    void ApplyPortrait(const char* key);
++#endif
+ 
+     inline void UpdateAll();
+     inline void ApplySlide(f32 offset);
+diff --git a/include/channel/System.h b/include/channel/System.h
+index 2fd29d6..cbbad9e 100644
+--- a/include/channel/System.h
++++ b/include/channel/System.h
+@@ -183,4 +183,9 @@ static inline void SetVec(Vec* v, f32 x, f32 y, f32 z) {
+     v->z = z;
+ }
+ 
++#ifdef FORECAST_PORT
++// Portrait (milestone 7): the screen around the frame on an upright phone.
++#include <channel_portrait.h>
++#endif
++
+ #endif
 diff --git a/include/channel/WeatherScene.h b/include/channel/WeatherScene.h
 index b26a3bd..9399170 100644
 --- a/include/channel/WeatherScene.h
@@ -1423,6 +1454,93 @@ index 8714c93..aaaee72 100644
  } TPLPalette;
  
  void TPLBind(TPLPalette* pal);
+diff --git a/src/ButtonGroup.cpp b/src/ButtonGroup.cpp
+index 1f90e46..9893990 100644
+--- a/src/ButtonGroup.cpp
++++ b/src/ButtonGroup.cpp
+@@ -11,6 +11,10 @@
+ #include <revolution/GX.h>
+ #include <revolution/MTX.h>
+ 
++#ifdef FORECAST_PORT
++#include <channel_portrait.h>
++#endif
++
+ inline void ButtonGroup::ResetButtons() {
+     for (int i = 0; i < mNumButtons; i++) {
+         mButtons[i]->Reset();
+@@ -58,6 +62,27 @@ ButtonGroup::ButtonGroup(void* arc, const char* layoutName, ButtonColors* colors
+     mSlideFrame = 0;
+ }
+ 
++#ifdef FORECAST_PORT
++void ButtonGroup::ApplyPortrait(const char* key) {
++    if (!PortraitLayout(key, mLayout->GetRootPane())) {
++        return;
++    }
++    ButtonColors* colors = mNumButtons > 0 ? mButtons[0]->mColors : NULL;
++    for (int i = 0; i < mNumButtons; i++) {
++        delete mButtons[i];
++    }
++    nw4r::lyt::PaneList& panes = mLayout->GetRootPane()->GetChildList();
++    mNumButtons = 0;
++    for (nw4r::lyt::PaneList::Iterator it = panes.GetBeginIter(); it != panes.GetEndIter(); ++it) {
++        if (mNumButtons >= BUTTON_GROUP_MAX_BUTTONS) {
++            break;
++        }
++        mButtons[mNumButtons++] = new LayoutButton(&*it, mDrawInfo, colors, mTagProcessor);
++    }
++    ResetButtons();
++}
++#endif
++
+ ButtonGroup::~ButtonGroup() {
+     for (int i = 0; i < mNumButtons; i++) {
+         delete mButtons[i];
+diff --git a/src/CityLabel.cpp b/src/CityLabel.cpp
+index bc56d2e..fe6a531 100644
+--- a/src/CityLabel.cpp
++++ b/src/CityLabel.cpp
+@@ -173,6 +173,9 @@ void CityLabel::Project(GlobeView* view, s32 zoomLevel) {
+     f32 right = 50.0f + GetScreenWidth();
+     f32 top = -50.0f;
+     f32 bottom = 506.0f;
++#ifdef FORECAST_PORT
++    PortraitOnScreen(&left, &top, &right, &bottom);
++#endif
+     if (mPos.x >= left && mPos.x <= right && mPos.y >= top && mPos.y <= bottom && facing < 0.0f) {
+         // How far the city is behind the point the camera looks at
+         f32 dist = nw4r::math::FSqrt(nw4r::math::VEC3DistSq(camera, (nw4r::math::VEC3*)&mWorldPos));
+@@ -414,6 +417,9 @@ void CityLabel::UpdateBorderFade() {
+     f32 limit = 456.0f - margin;
+     f32 left = (f32)(gWidescreen ? 36 : 28);
+     f32 right = (f32)(GetScreenWidth() - (gWidescreen ? 36 : 28));
++#ifdef FORECAST_PORT
++    PortraitLabelArea(&margin, &limit, &left, &right);
++#endif
+     f32 half = 0.5f * (gLabelIconSize * mScale);
+     f32 top = mPos.y - half;
+     f32 bottom = mPos.y + half;
+@@ -519,6 +525,9 @@ void CityLabel::UpdateBox() {
+     bottom = (f32)(456 - (gWidescreen ? 19 : 34)) - 40.0f;
+     left = (f32)(gWidescreen ? 36 : 28);
+     right = (f32)(GetScreenWidth() - (gWidescreen ? 36 : 28));
++#ifdef FORECAST_PORT
++    PortraitLabelArea(&top, &bottom, &left, &right);
++#endif
+     halfW = 0.5f * mSize.x;
+     y = 70.0f + mPos.y;
+     edgeR = mPos.x + halfW;
+@@ -1154,6 +1163,9 @@ void CityLabel::UpdateEdgeFade() {
+     // Dim the label while its icon is within 63 of the top or bottom of the screen
+     f32 margin = 63.0f;
+     f32 limit = 456.0f - margin;
++#ifdef FORECAST_PORT
++    PortraitLabelArea(&margin, &limit, NULL, NULL);
++#endif
+     f32 half = 0.5f * (gLabelIconSize * mScale);
+     f32 top = mPos.y - half;
+     f32 bottom = mPos.y + half;
 diff --git a/src/Connect.cpp b/src/Connect.cpp
 index 8f14596..f9da591 100644
 --- a/src/Connect.cpp
@@ -1800,7 +1918,7 @@ index a3424f2..ac48c6d 100644
          return;
      }
 diff --git a/src/SceneBase.cpp b/src/SceneBase.cpp
-index c8a3452..8161592 100644
+index c8a3452..44fa8f6 100644
 --- a/src/SceneBase.cpp
 +++ b/src/SceneBase.cpp
 @@ -108,7 +108,14 @@ SimpleModel* gEarthModel;
@@ -1836,6 +1954,34 @@ index c8a3452..8161592 100644
      case -1:
          break;
      default:
+@@ -1103,6 +1116,19 @@ void UpdateButtons(ButtonGroup* group, s32 hoverSound) {
+             }
+             f32 y = halfHeight - gPointerY[i][0];
+ 
++#ifdef FORECAST_PORT
++            // Portrait canvas: buttons sit anywhere on the screen around the
++            // frame; the pointer is kept on that screen instead.
++            if (gPortraitCanvas) {
++                PortraitScreen s;
++                GetPortraitScreen(&s);
++                f32 xl = scale * (s.left - halfWidth), xr = scale * (s.right - halfWidth);
++                f32 yb = halfHeight - s.bottom, yt = halfHeight - s.top;
++                x = x < xl ? xl : (x > xr ? xr : x);
++                y = y < yb ? yb : (y > yt ? yt : y);
++            } else
++#endif
++            {
+             if (x < -halfWidth43) {
+                 x = -halfWidth43;
+             } else if (x > halfWidth43) {
+@@ -1114,6 +1140,7 @@ void UpdateButtons(ButtonGroup* group, s32 hoverSound) {
+             } else if (y > halfHeight) {
+                 y = halfHeight;
+             }
++            }
+ 
+             LayoutButton* button = group->HitTest(x, y);
+             if (sHoveredButtons[i] != button) {
 diff --git a/src/SimpleModel.cpp b/src/SimpleModel.cpp
 index 4b30a36..b960602 100644
 --- a/src/SimpleModel.cpp
@@ -2062,10 +2208,96 @@ index 1ce7d42..12f74e4 100644
              mSelected = mEntries;
          }
 diff --git a/src/WeatherAround.cpp b/src/WeatherAround.cpp
-index df8263c..4ed0250 100644
+index df8263c..16ee26e 100644
 --- a/src/WeatherAround.cpp
 +++ b/src/WeatherAround.cpp
-@@ -1627,10 +1627,15 @@ Vector2 WeatherAround::GetTempSizeLarge(CityLabel* label) {
+@@ -166,6 +166,9 @@ WeatherAround::WeatherAround(void* arc)
+     }
+ 
+     mLayout = new ButtonGroup(arc, "around.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait("around");
++#endif
+     mNextButton = mLayout->FindButton("next");
+     mZoomInButton = mLayout->FindButton("zoom_in");
+     mZoomOutButton = mLayout->FindButton("zoom_out");
+@@ -181,6 +184,9 @@ WeatherAround::WeatherAround(void* arc)
+     mResetButton = mLayout->FindButton("reset");
+ 
+     mBeltLayout = new ButtonGroup(arc, "around_belt.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mBeltLayout->ApplyPortrait("around_belt");
++#endif
+     mBelt = mBeltLayout->FindButton("belt");
+     mBelt->ShowLanguagePane("beltB");
+     mKion = mBeltLayout->FindButton("kion");
+@@ -341,6 +347,9 @@ void WeatherAround::UpdateButtonFade() {
+     f32 right = 16.0f + GetScreenWidth();
+     f32 top = 63.0f;
+     f32 bottom = 393.0f;
++#ifdef FORECAST_PORT
++    PortraitBand(&top, &bottom);
++#endif
+     minDist = 900.0f;
+     s32 i;
+     BOOL moved = FALSE;
+@@ -385,6 +394,13 @@ void WeatherAround::UpdateButtonFade() {
+         mIdleTimer++;
+     }
+ 
++#ifdef FORECAST_PORT
++    // Portrait: the controls float over the globe and stay up.
++    if (gPortraitCanvas) {
++        mPointerIdle = 0;
++        mIdleTimer = 0;
++    }
++#endif
+     if (mPointerIdle < 10 && mIdleTimer < 90) {
+         mLayout->SlideIn(15);
+     } else {
+@@ -400,6 +416,11 @@ void WeatherAround::UpdateButtonFade() {
+     }
+ 
+     s32 minAlpha = 32;
++#ifdef FORECAST_PORT
++    if (gPortraitCanvas) {
++        minAlpha = 255; // solid tiles over the globe, not a see-through bar
++    }
++#endif
+     s32 alpha = minAlpha;
+     alpha += (s32)(255.0f - minAlpha) * nw4r::math::SinRad((1.5708f * (15 - mHoverTimer)) / 15.0f);
+     mLayout->SetButtonParams(alpha, mHoverTimer, 15);
+@@ -554,6 +575,9 @@ void WeatherAround::CalcActive() {
+     f32 x;
+     f32 top = 63.0f;
+     f32 bottom = 393.0f;
++#ifdef FORECAST_PORT
++    PortraitBand(&top, &bottom);
++#endif
+     for (s32 i = 0; i < 4; i++) {
+         y = gCursorY[i];
+         x = gCursorX[i];
+@@ -914,6 +938,9 @@ static inline void AddBackBucket(CityLabel** buckets, CityLabel* l) {
+ void WeatherAround::UpdateLabels() {
+     f32 top = 63.0f;
+     f32 bottom = 393.0f;
++#ifdef FORECAST_PORT
++    PortraitBand(&top, &bottom);
++#endif
+ 
+     ClearLists();
+ 
+@@ -1163,6 +1190,9 @@ BOOL WeatherAround::StateGlobe() {
+ void WeatherAround::UpdateDrag() {
+     f32 top = 63.0f;
+     f32 bottom = 393.0f;
++#ifdef FORECAST_PORT
++    PortraitBand(&top, &bottom);
++#endif
+     f32 startRot = gSimpleGlobe->mView != NULL ? gSimpleGlobe->mView->getOrientation()->z : 0.0f;
+     BOOL dragging = FALSE;
+ 
+@@ -1627,10 +1657,15 @@ Vector2 WeatherAround::GetTempSizeLarge(CityLabel* label) {
  }
  
  inline void SetTextBoxColors(nw4r::lyt::TextBox* textBox, nw4r::ut::Color top, nw4r::ut::Color bottom) {
@@ -2082,8 +2314,221 @@ index df8263c..4ed0250 100644
  }
  
  static void ZoomOutColorCallback(nw4r::lyt::Pane* pane, const GXColor* color) {
+diff --git a/src/WeatherBase.cpp b/src/WeatherBase.cpp
+index 25fa6a3..0001303 100644
+--- a/src/WeatherBase.cpp
++++ b/src/WeatherBase.cpp
+@@ -26,6 +26,17 @@ WeatherBase::WeatherBase(const Vec2& pos, const Vec2& size, s32 type)
+       unk90(0), mAlpha(255), unk98(-1), mCulled(FALSE), mVisible(TRUE) {
+     f32 x = mPos.x - 0.5f * GetScreenWidth();
+     f32 y = mPos.y - 228.0f;
++#ifdef FORECAST_PORT
++    {
++        // Portrait: a page covers the whole screen (the canvas).
++        PortraitScreen s;
++        GetPortraitScreen(&s);
++        mRect.right = s.right - s.left;
++        mRect.bottom = s.bottom - s.top;
++        x += s.left;
++        y += s.top;
++    }
++#endif
+     mRect.MoveTo(x, y);
+ }
+ 
+@@ -35,10 +46,18 @@ void WeatherBase::SetPosition(const Vec2& pos, const f32& scale, const bool& vis
+     mPos = pos;
+     mScale = scale;
+     mVisible = visible;
++#ifdef FORECAST_PORT
++    PortraitScreen s;
++    GetPortraitScreen(&s);
++    mRect.MoveTo(pos.x + s.left, -pos.y + s.top);
++    if (!mVisible || mRect.top >= s.bottom || mRect.bottom <= s.top || mRect.left >= s.right ||
++        mRect.right <= s.left) {
++#else
+     mRect.MoveTo(pos.x, -pos.y);
+ 
+     if (!mVisible || mRect.top >= 456.0f || mRect.bottom <= 0.0f || mRect.left >= GetScreenWidth() ||
+         mRect.right <= 0.0f) {
++#endif
+         mCulled = TRUE;
+     } else {
+         mCulled = FALSE;
+diff --git a/src/WeatherBaseDay.cpp b/src/WeatherBaseDay.cpp
+index 8b07786..ed4b794 100644
+--- a/src/WeatherBaseDay.cpp
++++ b/src/WeatherBaseDay.cpp
+@@ -99,6 +99,9 @@ void WeatherBaseDay::SetupJP(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, true);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mNoServiceText = mNoServiceLayout->FindButton("text");
+     if (mNoServiceText == NULL) {
+@@ -176,6 +179,9 @@ void WeatherBaseDay::Setup(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, true);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mNoServiceText = mNoServiceLayout->FindButton("text");
+     if (mNoServiceText == NULL) {
+@@ -211,6 +217,17 @@ void WeatherBaseDay::Setup(void* arc) {
+     mBoxes[1].mX = GetScreenWidth() - margin;
+     f32 left = mBoxes[0].mX + 0.5f * mBoxes[0].mWidth;
+     mBoxes[1].mWidth = mBoxes[1].mX - (20.0f + left);
++#ifdef FORECAST_PORT
++    {
++        // Portrait: the wind on its own row, right-aligned at the screen's edge.
++        PortraitScreen s;
++        GetPortraitScreen(&s);
++        if (s.active) {
++            mBoxes[1].mX = s.right - margin;
++            mBoxes[1].mWidth = mBoxes[1].mX - (s.left + margin);
++        }
++    }
++#endif
+     mIconBox = &mBoxes[4];
+     mIconBox->mWidth = sIconWidth;
+     mIconBox->mHeight = sIconHeight;
+diff --git a/src/WeatherNormal.cpp b/src/WeatherNormal.cpp
+index 3105912..0bed185 100644
+--- a/src/WeatherNormal.cpp
++++ b/src/WeatherNormal.cpp
+@@ -161,6 +161,11 @@ WeatherNormal::WeatherNormal(void* arc)
+     mLayout = new ButtonGroup(arc, "forecast.brlyt", gButtonColors, false);
+     mBaseLayout = new ButtonGroup(arc, "base.brlyt", gButtonColors, false);
+     mBeltLayout = new ButtonGroup(arc, "base_belt.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait("forecast");
++    mBaseLayout->ApplyPortrait("base");
++    mBeltLayout->ApplyPortrait("base_belt");
++#endif
+     if (gLanguage == 0) {
+         mTimeLayout = new ButtonGroup(arc, "day_6h_nJP.brlyt", gButtonColors, false);
+     } else {
+@@ -171,6 +176,9 @@ WeatherNormal::WeatherNormal(void* arc)
+         Vec2 pos;
+         Vec2 offset;
+         f32 height = 456.0f;
++#ifdef FORECAST_PORT
++        height = PortraitPageStep(); // portrait: the pages are a screen apart
++#endif
+         s32 width = GetScreenWidth();
+         pos.x = 0.5f * width;
+         pos.y = 0.5f * height;
+@@ -333,6 +341,34 @@ WeatherNormal::WeatherNormal(void* arc)
+         mBelt[1].mMaxHeight = 2.0f * (halfHeight - 8.0f);
+     }
+ 
++#ifdef FORECAST_PORT
++    {
++        // Portrait: the belt and the "As of" time moved with their panes
++        // (port/channel/portrait.cpp, BaseBelt); the code's own copies follow.
++        PortraitScreen s;
++        GetPortraitScreen(&s);
++        if (s.active) {
++            LayoutButton* belt = mBeltLayout->FindButton("belt");
++            f32 beltY = belt != NULL ? 228.0f - belt->mOrigTrans.y : 98.0f;
++            f32 dy = beltY - 98.0f;
++            for (s32 i = 0; i < 2; i++) {
++                mBelt[i].mRect.top += dy;
++                mBelt[i].mRect.bottom += dy;
++                mBelt[i].mY += dy;
++            }
++            mBelt[0].mRect.left = s.left;
++            mBelt[0].mRect.right = s.left + 240.0f;
++            mBelt[0].mX = s.left + 120.0f;
++            mBelt[1].mRect.left = s.left + 240.0f;
++            mBelt[1].mRect.right = s.right;
++            mBelt[1].mX = s.right - GetSideMargin();
++            mBelt[1].mMaxWidth = (mBelt[1].mX - mBelt[1].mRect.left) - 8.0f;
++            if (gLanguage != 0) {
++                mDateX = s.right - GetSideMargin();
++            }
++        }
++    }
++#endif
+     mSetupDate = sSetupDateFuncs[gLanguage];
+     mSetupBelt = sSetupBeltFuncs[gLanguage];
+ 
+@@ -517,6 +553,11 @@ void WeatherNormal::Show() {
+ }
+ 
+ void WeatherNormal::CalcActive() {
++#ifdef FORECAST_PORT
++    if (gPortraitCanvas) {
++        port_portrait_pages(); // a one-finger swipe turns the page
++    }
++#endif
+     unk7FC = TRUE;
+     mSoundEnabled = TRUE;
+     UpdateBeltHover();
+@@ -1092,7 +1133,12 @@ void WeatherNormal::Draw() {
+     CityNameLine* line = mNames;
+     f32 lineHeight = mBelt[1].mRect.GetHeight();
+     f32 y = mNameScroll + (mCityRect.top + 0.5f * mCityRect.GetHeight());
++#ifdef FORECAST_PORT
++    // Portrait: the belt can be above the frame (a negative top).
++    SetScaledScissor(0, (u32)(s32)mBelt[1].mRect.top, GetScreenWidth(), lineHeight);
++#else
+     SetScaledScissor(0, mBelt[1].mRect.top, GetScreenWidth(), lineHeight);
++#endif
+     switch (mDateType) {
+     case 0:
+         for (i = 0; i < mNumNames; i++, line++) {
+@@ -1670,6 +1716,9 @@ BOOL WeatherNormal::ChangeState(StateFunc state, s32 arg) {
+ inline void WeatherNormal::LayoutPages() {
+     f32 y = mPageY;
+     f32 step = 456.0f;
++#ifdef FORECAST_PORT
++    step = PortraitPageStep();
++#endif
+     s32 i;
+     for (i = 0; i < gForecastPageCount; i++) {
+         mPageVisible[i] = TRUE;
+@@ -2094,6 +2143,9 @@ BOOL WeatherNormal::StateToAround(s32 arg) {
+         if (gSimpleGlobe != NULL) {
+             mPhase++;
+             pageY = -456.0f;
++#ifdef FORECAST_PORT
++            pageY = -PortraitPageStep();
++#endif
+             pageX = sAroundPageX;
+             mPageX = pageX;
+             mPageY = pageY;
+diff --git a/src/WeatherOther.cpp b/src/WeatherOther.cpp
+index 4d956e5..0078ec9 100644
+--- a/src/WeatherOther.cpp
++++ b/src/WeatherOther.cpp
+@@ -65,6 +65,9 @@ void WeatherOther::SetupJP(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mNoServiceText = mNoServiceLayout->FindButton("text");
+     if (mNoServiceText == NULL) {
+@@ -120,6 +123,9 @@ void WeatherOther::Setup(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mIconPane = mLayout->FindButton("life_b");
+     if (mIconPane == NULL) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..789dd07 100644
+index 661a8c4..a0fbe66 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
 @@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
@@ -2097,7 +2542,38 @@ index 661a8c4..789dd07 100644
  
      mLayoutArc = LoadCompressedContentFile(gUnk80330B64, "weather_layout.arc.LZ", 32, NULL, gMEM2Heap);
      if (mLayoutArc == NULL) {
-@@ -526,11 +526,11 @@ void WeatherScene::DrawNormal() {
+@@ -281,6 +281,19 @@ void WeatherScene::Exit(BOOL shutdownNet, s32 event) {
+ void WeatherScene::Init() {}
+ 
+ void WeatherScene::Draw() {
++#ifdef FORECAST_PORT
++    // Portrait: the forecast pages and the globe are laid out on the canvas
++    // around the frame (channel_portrait.h); the other views are letterboxed.
++    gPortraitCanvas = FALSE;
++    if (mDrawFunc == &WeatherScene::DrawNormal) {
++        PortraitScreen screen;
++        GetPortraitScreen(&screen);
++        if (screen.active) {
++            gPortraitCanvas = TRUE;
++            RequestPortraitCanvas();
++        }
++    }
++#endif
+     if (!gFatalRequested) {
+         if (mDrawFunc) {
+             (this->*mDrawFunc)();
+@@ -523,14 +536,22 @@ void WeatherScene::DrawNormal() {
+     }
+ 
+     nw4r::math::VEC3 pos(sTitlePos.x, sTitlePos.y + gTitleOffsetY, sTitlePos.z);
++#ifdef FORECAST_PORT
++    if (gPortraitCanvas) {
++        f32 x, y;
++        PortraitCreditPos(&x, &y);
++        pos.x = x;
++        pos.y += y - 365.0f;
++    }
++#endif
  
      SetDefaultGXState();
      SetOrthoProjection();
@@ -2111,6 +2587,30 @@ index 661a8c4..789dd07 100644
          mIconPos.z = pos.z;
          TPLPalette* tpl = gCommonTpl;
          u32 icon = 3;
+diff --git a/src/WeatherWeek.cpp b/src/WeatherWeek.cpp
+index 525ec6a..c246738 100644
+--- a/src/WeatherWeek.cpp
++++ b/src/WeatherWeek.cpp
+@@ -121,6 +121,9 @@ void WeatherWeek::SetupJP(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mNoServiceText = mNoServiceLayout->FindButton("text");
+     if (mNoServiceText == NULL) {
+@@ -207,6 +210,9 @@ void WeatherWeek::Setup(void* arc) {
+     f32 scaleX = gWidescreen ? 1.3684211f : 1.0f;
+ 
+     mLayout = new ButtonGroup(arc, layoutName, gButtonColors, false);
++#ifdef FORECAST_PORT
++    mLayout->ApplyPortrait(layoutName);
++#endif
+     mNoServiceLayout = new ButtonGroup(arc, "life_no_service.brlyt", gButtonColors, false);
+     mNoServiceText = mNoServiceLayout->FindButton("text");
+     if (mNoServiceText == NULL) {
 diff --git a/src/WiiConnect24.cpp b/src/WiiConnect24.cpp
 index 37e5133..336a8b3 100644
 --- a/src/WiiConnect24.cpp

@@ -17,6 +17,8 @@
 // - Pinch: zoom the globe (- / + on the Remote), one step per PINCH_STEP.
 // - Two-finger swipe up / down: Up / Down on the Remote's + pad (the globe's
 //   tilt; the page above / below on the forecast pages).
+// - Portrait, on the forecast pages: a one-finger swipe up / down turns the
+//   page (Down / Up), as the pages are stacked vertically.
 // - Mouse wheel (Windows): zoom.
 // While two fingers are down the pointer is off screen and A is released, so
 // the globe does not spin.
@@ -40,6 +42,8 @@ static u32 sHold;
 #define BAR_EDGE 0.72f        // |pointer y| beyond this: the bars (y 63 / 393 of 456)
 #define PINCH_STEP 1.18f      // finger distance ratio per zoom step
 #define SWIPE_STEP 0.12f      // two-finger travel (window heights) per Up / Down
+#define FLICK_MOVE 0.08f      // one-finger page swipe: at least this far (window heights) ...
+#define FLICK_FRAMES 45       // ... within this many frames, mostly vertical
 #define PARK_X (-1.025f)      // ~8 px left of the screen (the channel counts x >= -16)
 #define PARK_Y (-1.0f)        // the top edge
 
@@ -312,6 +316,11 @@ s32 KPADRead(s32 chan, KPADStatus* samples, u32 numSamples) {
             // A tap shows the globe's bars; a tap in the middle while they
             // are shown hides them; a tap on them (a button) keeps them.
             bool tap = sFrame - sTouchStart <= TAP_FRAMES && sTouchMove <= TAP_MOVE;
+            f32 dx = (x - sTouchX0) / (f32)wh, dy = (y - sTouchY0) / (f32)wh;
+            if (port_portrait_pages_showing() && sFrame - sTouchStart <= FLICK_FRAMES &&
+                SDL_fabsf(dy) >= FLICK_MOVE && SDL_fabsf(dy) > 2.0f * SDL_fabsf(dx)) {
+                pulse(dy < 0.0f ? WPAD_BUTTON_DOWN : WPAD_BUTTON_UP); // finger up: the next page
+            }
             bool onBars = pos.y <= -BAR_EDGE || pos.y > BAR_EDGE;
             if (tap && (onBars || !sTouchWasParked)) {
                 sParkUntil = sFrame + 1 + PARK_FRAMES;

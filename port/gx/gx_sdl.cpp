@@ -77,6 +77,13 @@ static SDL_GPUTexture* sEfbDepth;
 static u32 sEfbW, sEfbH, sScale;
 static u32 sMargin;
 static f32 sWideK = 1.0f; // sEfbW / (sEfbW + 2 * sMargin)
+// The EFB texture in EFB pixels (times sScale on the GPU): landscape the
+// frame and its margins (sEfbW + 2 * sMargin by sEfbH); portrait the canvas
+// (see "Portrait" below).
+static u32 sCanvasW, sCanvasH;
+static bool sPortrait;   // the EFB is a portrait canvas
+static bool sCanvasMode; // portrait, this frame: laid out for the canvas (else letterboxed)
+static bool sFrameOpen;  // this frame's first draw or copy has decided sCanvasMode
 static bool sClearNext = true;
 static SDL_FColor sClearColor;
 static f32 sClearDepth = 1.0f;
@@ -575,9 +582,111 @@ static f32 sWideness;    // as presented: 0 edge extension .. 1 the 3D margins
 // game scissor left / top / right / bottom, the texture maps its TEV reads
 // usedMaps): widens it or keeps it in the frame, and notes what the frame
 // looks like.
+// --- portrait -----------------------------------------------------------------------------
+//
+// A window taller than wide (port_platform.h, PortPortrait): the EFB is a
+// canvas as large as the window, in EFB pixels at the frame's landscape size
+// (360 wide: the 640-pixel frame is 16:9 as high as the window is wide). Each
+// frame is either
+// - laid out for the canvas (the game called port_portrait_canvas): the frame
+//   is centred on the canvas at that size, wider than it, and every draw is
+//   mapped there, so whatever the game puts outside the frame (layout parts
+//   it moved there, the globe's 3D beyond the old view) lands on the canvas
+//   around it. Ortho draws exactly over the frame (a fade, a background no
+//   layout moved) are stretched over the whole canvas instead;
+// - or letterboxed: the frame as wide as the canvas, centred.
+// The mode is decided at the frame's first draw, copy or clear (the game asks
+// for it before it draws).
+struct FramePlace {
+    f32 x, y, w, h; // the frame in canvas pixels
+};
+
+static FramePlace frame_place(void) {
+    FramePlace f;
+    if (sCanvasMode) {
+        f.w = (f32)sEfbW;
+        f.h = (f32)sEfbH;
+    } else {
+        f.w = (f32)sCanvasW;
+        f.h = (f32)sEfbH * (f32)sCanvasW / (f32)sEfbW;
+    }
+    f.x = ((f32)sCanvasW - f.w) * 0.5f;
+    f.y = ((f32)sCanvasH - f.h) * 0.5f;
+    return f;
+}
+
+static void frame_open(void) {
+    if (!sFrameOpen) {
+        sFrameOpen = true;
+        bool canvas = port_portrait_take_canvas();
+        // Testing: FORECAST_PORTRAIT_CANVAS=n puts every frame from frame n on
+        // on the canvas.
+        static const char* sForce = SDL_getenv("FORECAST_PORTRAIT_CANVAS");
+        if (sForce != NULL && SDL_atoi(sForce) > 0 && sFrame + 1 >= (u32)SDL_atoi(sForce)) {
+            canvas = true;
+        }
+        sCanvasMode = sPortrait && canvas;
+    }
+}
+
+// A game rectangle (EFB pixels of the frame) in canvas pixels, clipped to the canvas.
+static SDL_Rect canvas_rect(const FramePlace& f, f32 left, f32 top, f32 right, f32 bottom) {
+    f32 kx = f.w / (f32)sEfbW, ky = f.h / (f32)sEfbH;
+    int x0 = (int)SDL_floorf(f.x + left * kx), y0 = (int)SDL_floorf(f.y + top * ky);
+    int x1 = (int)SDL_ceilf(f.x + right * kx), y1 = (int)SDL_ceilf(f.y + bottom * ky);
+    x0 = SDL_max(x0, 0);
+    y0 = SDL_max(y0, 0);
+    x1 = SDL_min(x1, (int)sCanvasW);
+    y1 = SDL_min(y1, (int)sCanvasH);
+    SDL_Rect r = {x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0};
+    return r;
+}
+
+static void portrait_draw(Draw& d, int left, int top, int right, int bottom) {
+    int efbW = (int)sEfbW, efbH = (int)sEfbH;
+    FramePlace f = frame_place();
+    bool fullScissor = left <= 0 && top <= 0 && right >= efbW && bottom >= efbH;
+    bool stretch = false;
+    if (sCanvasMode && fullScissor && gx.xfReg[0x26] != 0) {
+        f32 x0 = 2.0f, x1 = -2.0f, y0 = 2.0f, y1 = -2.0f;
+        const GXVtxOut* v = &sVerts[d.first];
+        for (u32 i = 0; i < d.count; i++) {
+            x0 = SDL_min(x0, v[i].pos[0]);
+            x1 = SDL_max(x1, v[i].pos[0]);
+            y0 = SDL_min(y0, v[i].pos[1]);
+            y1 = SDL_max(y1, v[i].pos[1]);
+        }
+        const f32 e = 0.01f;
+        stretch = fabsf(x0 + 1.0f) < e && fabsf(x1 - 1.0f) < e && fabsf(y0 + 1.0f) < e && fabsf(y1 - 1.0f) < e;
+    }
+    d.wide = true;
+    if (!stretch) {
+        // Frame clip space -> canvas clip space.
+        f32 cw = (f32)sCanvasW, ch = (f32)sCanvasH;
+        f32 ax = f.w / cw, bx = (2.0f * f.x + f.w) / cw - 1.0f;
+        f32 ay = f.h / ch, by = 1.0f - (2.0f * f.y + f.h) / ch;
+        GXVtxOut* v = &sVerts[d.first];
+        for (u32 i = 0; i < d.count; i++) {
+            v[i].pos[0] = v[i].pos[0] * ax + v[i].pos[3] * bx;
+            v[i].pos[1] = v[i].pos[1] * ay + v[i].pos[3] * by;
+        }
+    }
+    SDL_Rect sc;
+    if (fullScissor && (stretch || sCanvasMode)) {
+        sc = {0, 0, (int)sCanvasW, (int)sCanvasH};
+    } else {
+        sc = canvas_rect(f, (f32)left, (f32)top, (f32)right, (f32)bottom);
+    }
+    d.scissor = sc;
+}
+
 static void fill_draw(Draw& d, int left, int top, int right, int bottom, u32 usedMaps) {
     int efbW = (int)sEfbW, efbH = (int)sEfbH, m = (int)sMargin;
     d.wide = false;
+    if (sPortrait) {
+        portrait_draw(d, left, top, right, bottom);
+        return;
+    }
     if (m == 0) {
         d.scissor.x = left;
         d.scissor.w = right > left ? right - left : 0;
@@ -651,6 +760,7 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     if (gx_bits(gx.bp[0x00], 14, 2) == 3) {
         return; // cull all
     }
+    frame_open();
     Draw d;
     d.first = (u32)sVerts.size();
     d.count = gx_xform_primitive(primitive, verts, count, sVerts);
@@ -713,10 +823,12 @@ void gx_draw(u32 primitive, const GXVertexIn* verts, u32 count) {
     int left = (int)gx_bits(gx.bp[0x20], 12, 11) - 342;
     int bottom = (int)gx_bits(gx.bp[0x21], 0, 11) - 342 + 1;
     int right = (int)gx_bits(gx.bp[0x21], 12, 11) - 342 + 1;
-    if (left < 0) {
+    // Portrait: scissors may start above or left of the frame (on the
+    // canvas around it); portrait_draw clips them to the canvas.
+    if (left < 0 && !sPortrait) {
         left = 0;
     }
-    if (top < 0) {
+    if (top < 0 && !sPortrait) {
         top = 0;
     }
     d.scissor.y = top;
@@ -797,6 +909,50 @@ static void ensure_efb(void) {
     SDL_GetWindowSize(port_window(), &ww, &wh);
     PortDisplay d;
     port_display_layout((f32)ww, (f32)wh, &d);
+    if (d.portrait) {
+        // The canvas: the frame (w EFB pixels across 16:9 of the window's
+        // width) and the screen around it, in EFB pixels.
+        f32 fw = (f32)ww * (16.0f / 9.0f), fh = (f32)ww;
+        u32 cw = (u32)SDL_lroundf((f32)w * (f32)ww / fw), ch = (u32)SDL_ceilf((f32)h * (f32)wh / fh);
+        // As many pixels as the landscape EFB at most: a 3x canvas on an
+        // iPhone (1080x2967) would be past what kept the GPU at 60 fps.
+#ifdef SDL_PLATFORM_IOS
+        u32 pscale = pw > 0 ? (u32)pw / cw : 2;
+#else
+        u32 pscale = pw > 0 ? (u32)((pw + cw - 1) / cw) : 2;
+#endif
+        while (pscale > 1 && cw * ch * pscale * pscale > w * (u32)(h * 21 / 16) * 4 * 1u) {
+            pscale--;
+        }
+        if (forced != NULL && SDL_atoi(forced) > 0) {
+            pscale = SDL_min((u32)SDL_atoi(forced), 4u);
+        }
+        pscale = SDL_max(pscale, 1u);
+        if (sEfbColor != NULL && sPortrait && w == sEfbW && h == sEfbH && pscale == sScale && cw == sCanvasW &&
+            ch == sCanvasH) {
+            return;
+        }
+        if (sEfbColor != NULL) {
+            SDL_ReleaseGPUTexture(sDev, sEfbColor);
+            SDL_ReleaseGPUTexture(sDev, sEfbDepth);
+        }
+        sPortrait = true;
+        sEfbW = w;
+        sEfbH = h;
+        sScale = pscale;
+        sMargin = 0;
+        sWideK = 1.0f;
+        sCanvasW = cw;
+        sCanvasH = ch;
+        sEfbColor = create_texture(cw * pscale, ch * pscale, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                   SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        sEfbDepth = create_texture(cw * pscale, ch * pscale, sDepthFmt, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+        sClearNext = true;
+        port_log("gx: portrait canvas %lux%lu at %lux (%lux%lu) around the %lux%lu frame\n", (unsigned long)cw,
+                 (unsigned long)ch, (unsigned long)pscale, (unsigned long)(cw * pscale),
+                 (unsigned long)(ch * pscale), (unsigned long)w, (unsigned long)h);
+        return;
+    }
     if (d.w > 0.0f) {
         f32 side = SDL_max(d.fillLeft, d.fillRight);
         margin = (u32)SDL_ceilf(side / d.w * (f32)w);
@@ -806,18 +962,22 @@ static void ensure_efb(void) {
             margin = maxMargin;
         }
     }
-    if (sEfbColor != NULL && w == sEfbW && h == sEfbH && scale == sScale && margin == sMargin) {
+    if (sEfbColor != NULL && !sPortrait && w == sEfbW && h == sEfbH && scale == sScale && margin == sMargin) {
         return;
     }
     if (sEfbColor != NULL) {
         SDL_ReleaseGPUTexture(sDev, sEfbColor);
         SDL_ReleaseGPUTexture(sDev, sEfbDepth);
     }
+    sPortrait = false;
+    sCanvasMode = false;
     sEfbW = w;
     sEfbH = h;
     sScale = scale;
     sMargin = margin;
     sWideK = (f32)w / (f32)(w + 2 * margin);
+    sCanvasW = w + 2 * margin;
+    sCanvasH = h;
     u32 tw = (w + 2 * margin) * scale;
     sEfbColor = create_texture(tw, h * scale, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
@@ -939,8 +1099,7 @@ static void render(SDL_GPUCommandBuffer* cb) {
     // The game's frame, and with the screen fill the whole widened EFB.
     const SDL_GPUViewport frameVp = {(f32)(sMargin * sScale), 0.0f, (f32)(sEfbW * sScale), (f32)(sEfbH * sScale),
                                      0.0f, 1.0f};
-    const SDL_GPUViewport wideVp = {0.0f, 0.0f, (f32)((sEfbW + 2 * sMargin) * sScale), (f32)(sEfbH * sScale), 0.0f,
-                                    1.0f};
+    const SDL_GPUViewport wideVp = {0.0f, 0.0f, (f32)(sCanvasW * sScale), (f32)(sCanvasH * sScale), 0.0f, 1.0f};
     SDL_SetGPUViewport(rp, &frameVp);
     bool wideVpSet = false;
     SDL_GPUBufferBinding vb = {sVtxBuf, 0};
@@ -952,7 +1111,7 @@ static void render(SDL_GPUCommandBuffer* cb) {
         SDL_Rect sc = {d.scissor.x * (int)sScale, d.scissor.y * (int)sScale, d.scissor.w * (int)sScale,
                        d.scissor.h * (int)sScale};
         // Right edge: the frame's, or the widened EFB's for widened draws.
-        int maxW = (int)((d.wide ? sEfbW + 2 * sMargin : sEfbW + sMargin) * sScale), maxH = (int)(sEfbH * sScale);
+        int maxW = (int)((d.wide ? sCanvasW : sEfbW + sMargin) * sScale), maxH = (int)(sCanvasH * sScale);
         if (sc.x + sc.w > maxW) {
             sc.w = maxW - sc.x;
         }
@@ -1079,6 +1238,21 @@ static void compose(SDL_GPUCommandBuffer* cb, SDL_GPUTexture* target, Uint32 tw,
     ct.load_op = SDL_GPU_LOADOP_CLEAR;
     ct.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
     ct.store_op = SDL_GPU_STOREOP_STORE;
+    if (sPortrait) {
+        // The canvas is the screen.
+        SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cb, &ct, 1, NULL));
+        SDL_GPUBlitInfo bi = {};
+        bi.source.texture = sEfbColor;
+        bi.source.w = sCanvasW * sScale;
+        bi.source.h = sCanvasH * sScale;
+        bi.destination.texture = target;
+        bi.destination.w = tw;
+        bi.destination.h = th;
+        bi.load_op = SDL_GPU_LOADOP_LOAD;
+        bi.filter = SDL_GPU_FILTER_LINEAR;
+        SDL_BlitGPUTexture(cb, &bi);
+        return;
+    }
     bool fill = sMargin != 0 && (d.fillLeft > 0.0f || d.fillRight > 0.0f);
     SDL_GPUGraphicsPipeline* pipe = fill ? present_pipeline(fmt) : NULL;
     if (pipe == NULL) {
@@ -1232,7 +1406,13 @@ static SDL_GPUTransferBuffer* download(SDL_GPUCopyPass* cp, SDL_GPUTexture* tex,
 }
 
 static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
-    u32 w = sEfbW * sScale, h = sEfbH * sScale;
+    u32 w = sEfbW * sScale, h = sEfbH * sScale, x = sMargin * sScale;
+    if (sPortrait) {
+        // Portrait: the whole canvas (what the window shows).
+        w = sCanvasW * sScale;
+        h = sCanvasH * sScale;
+        x = 0;
+    }
     // The screen as the window shows it (its last size, else the window's).
     SDL_GPUTexture* screen = NULL;
     u32 sw = sSwapW, sh = sSwapH;
@@ -1255,7 +1435,7 @@ static void dump_efb(SDL_GPUCommandBuffer* cb, u32 frame) {
         }
     }
     SDL_GPUCopyPass* cp = SDL_BeginGPUCopyPass(cb);
-    SDL_GPUTransferBuffer* tb = download(cp, sEfbColor, sMargin * sScale, w, h);
+    SDL_GPUTransferBuffer* tb = download(cp, sEfbColor, x, w, h);
     SDL_GPUTransferBuffer* sb = screen != NULL ? download(cp, screen, 0, sw, sh) : NULL;
     SDL_EndGPUCopyPass(cp);
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cb);
@@ -1335,6 +1515,10 @@ extern "C" void port_gx_present(void) {
     }
     sLastWide = sFrameWide;
     SDL_GPUCommandBuffer* cb = get_cmd();
+    // Portrait: the pointer maps onto what this frame shows; the next frame
+    // decides its own mode at its first draw.
+    port_portrait_presented(sCanvasMode);
+    sFrameOpen = false;
     if (cb != NULL) {
         present(cb);
         if (dump_requested(sFrame + 1)) {
@@ -1393,6 +1577,7 @@ extern "C" void port_gx_present(void) {
 
 // GXCopyTex: copies an EFB rectangle into a texture kept on the GPU.
 static void copy_to_texture(u32 command) {
+    frame_open();
     flush();
     SDL_GPUCommandBuffer* cb = get_cmd();
     if (cb == NULL) {
@@ -1412,8 +1597,21 @@ static void copy_to_texture(u32 command) {
     if (fmt != 4 && fmt != 5 && fmt != 6) { // RGB565, RGB5A3, RGBA8
         WARN_ONCE("gx: EFB copy to texture format %lu copied as RGBA\n", (unsigned long)fmt);
     }
+    // Portrait: the rectangle on the canvas; the whole frame on a canvas frame
+    // is the whole canvas (what a full-frame quad drawing the copy covers).
+    SDL_Rect src = {(int)(x + sMargin), (int)y, (int)w, (int)h};
+    if (sPortrait) {
+        if (sCanvasMode && x == 0 && y == 0 && w == sEfbW && h == sEfbH) {
+            src = {0, 0, (int)sCanvasW, (int)sCanvasH};
+        } else {
+            src = canvas_rect(frame_place(), (f32)x, (f32)y, (f32)(x + w), (f32)(y + h));
+        }
+        if (src.w <= 0 || src.h <= 0) {
+            return;
+        }
+    }
     EfbCopy& c = sEfbCopies[addr];
-    u32 gw = w * sScale, gh = h * sScale;
+    u32 gw = (u32)src.w * sScale, gh = (u32)src.h * sScale;
     if (c.tex == NULL || c.w != gw || c.h != gh) {
         if (c.tex != NULL) {
             sRetired.push_back(c.tex);
@@ -1424,8 +1622,8 @@ static void copy_to_texture(u32 command) {
     }
     SDL_GPUBlitInfo bi = {};
     bi.source.texture = sEfbColor;
-    bi.source.x = (x + sMargin) * sScale; // game coordinates: the frame, not the margins
-    bi.source.y = y * sScale;
+    bi.source.x = (u32)src.x * sScale; // game coordinates: the frame, not the margins
+    bi.source.y = (u32)src.y * sScale;
     bi.source.w = gw;
     bi.source.h = gh;
     bi.destination.texture = c.tex;
@@ -1439,6 +1637,9 @@ static void copy_to_texture(u32 command) {
 void gx_efb_copy(u32 command) {
     bool clear = (command >> 11) & 1;
     bool toXfb = (command >> 14) & 1;
+    if (!toXfb) {
+        frame_open();
+    }
     if (toXfb) {
         port_gx_present();
     } else {

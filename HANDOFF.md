@@ -140,6 +140,11 @@ build\windows\forecast.exe                    # log: build\windows\data\boot.log
      shows the globe's bars, pinch zooms, two-finger swipe = Up/Down) and the screen fill
      (`PLAN.md` "Milestone 7"). The user asked that nothing important sit under the Dynamic
      Island: UI stays in the 16:9 frame, only scenery goes into the side strips.
+   - Portrait prototype (2026-11-17, not yet on the phone; `PLAN.md` "Milestone 7"): start the
+     app held upright. Test on Windows with `FORECAST_WINDOW=450x975 FORECAST_SAFE_AREA=67,39`
+     (an iPhone 15 Pro's shape and insets); `FORECAST_PORTRAIT=0` letterboxes a tall window,
+     `FORECAST_PORTRAIT_CANVAS=n` puts every frame from n on on the canvas; dumps are the whole
+     canvas.
    - Reinstalling the .ipa wipes the app's Documents (their sideloading tool reinstalls from
      scratch), so the six channel files must be copied in again. Options: an in-app file picker
      (UIDocumentPicker) that imports from anywhere in Files, or keeping a copy outside the app.

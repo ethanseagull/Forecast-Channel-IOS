@@ -350,6 +350,26 @@ Off on the port (each marked in the source):
   16:9 windows: dumps byte-identical to before. iOS: home indicator dimmed
   (`SDL_HINT_IOS_HIDE_HOME_INDICATOR` 2). Costs ~22% more EFB pixels on the phone.
 - `port_display_rect` gives kpad the frame in window coordinates (points on iOS).
+- **Portrait** (prototype, 2026-11-17; concepts chosen by the user: the 5-Day Forecast as a day
+  list, the globe "Earth-style"). A window taller than wide is a canvas around the frame
+  (`PortPortrait`, `port_platform.h`): the frame keeps its landscape size (as high as the window
+  is wide), centred, wider than the screen; an iPhone 15 Pro's canvas is about 182..650 x
+  -266..722 in game units (360x988 EFB pixels, 2x). Each frame is laid out for the canvas when
+  the game calls `port_portrait_canvas()` (WeatherScene: the forecast pages and the globe), else
+  letterboxed (settings, setup, errors). On the canvas every draw's clip space is mapped onto it
+  (`portrait_draw`, `gx_sdl.cpp`), so the 3D globe simply sees more and 2D parts can sit outside
+  the frame; ortho draws exactly over the frame (fades, unmoved backgrounds) stretch over it;
+  full-frame scissors and EFB copies cover it. Layout parts get portrait places when a layout
+  loads (`ButtonGroup::ApplyPortrait` -> `port/channel/portrait.cpp`, measured from the canvas
+  edges and safe area; `tools/lyt_dump.py` lists a layout's panes), before the code measures
+  them; the decomp's own copies (belt rects, date and wind text, label fading, the button
+  pointer clamp, page culling, the 456 page step) follow under FORECAST_PORT
+  (`channel_portrait.h`). Pages: top row (up, Settings), belt, content stacked, "As of" strip,
+  bottom row; one-finger vertical swipe turns the page. Globe: End / Next and the title belt at
+  the top, zoom and tilts in a column on the right, Restore bottom right, controls always up.
+  iOS: portrait added to `Info.plist`; the orientation the app starts in is kept
+  (`SDL_HINT_ORIENTATIONS`). Not converted yet (letterboxed or as on the Wii): UV Index page,
+  the 6-hour detail, settings, setup, errors; the city detail card at the bottom of the globe.
 
 ### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.

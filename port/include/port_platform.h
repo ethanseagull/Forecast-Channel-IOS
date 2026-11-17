@@ -27,6 +27,8 @@ void port_pointer(float* x, float* y, bool* down, bool* inside);
 typedef struct PortDisplay {
     float x, y, w, h;            // the frame
     float fillLeft, fillRight;   // widths of the filled strips left and right of it
+    bool portrait;               // the window is taller than wide (see PortPortrait)
+    bool canvas;                 // portrait: the frame at full size in the canvas (else letterboxed)
 } PortDisplay;
 
 // The layout for a drawable of width x height, in that drawable's units: the
@@ -43,6 +45,32 @@ void port_display_layout(float width, float height, PortDisplay* d);
 // The game's 16:9 frame in window coordinates: the units of SDL_GetWindowSize
 // and of mouse / touch events (points on iOS, not pixels). x, y top-left.
 void port_display_rect(float* x, float* y, float* w, float* h);
+
+// Portrait (milestone 7): a window taller than wide. The screen is a canvas
+// around the game's frame: the frame keeps the size it has in landscape (as
+// high as the window is wide, so text keeps its size) with its centre on the
+// screen's centre, and is wider than the screen. Screens laid out for
+// portrait call port_portrait_canvas() every frame before they draw and place
+// their parts anywhere on the canvas (the 3D globe simply sees more); the
+// others are shown letterboxed (the 16:9 frame as wide as the screen).
+// Coordinates are the game's: the frame is 0..832 x 0..456 (16:9), y down.
+// FORECAST_PORTRAIT=0 turns portrait off (a tall window is letterboxed).
+typedef struct PortPortrait {
+    bool active;                     // the window is taller than wide
+    float left, top, right, bottom;  // the canvas (the whole screen) in game units
+    float safeTop, safeBottom;       // status bar / Dynamic Island, home indicator, in game units
+} PortPortrait;
+void port_portrait(PortPortrait* p);
+// This frame is laid out for the canvas. Called by the game before it draws.
+void port_portrait_canvas(void);
+// gx: whether the frame now starting is drawn on the canvas (and forgets the
+// request); and which way the last presented frame was shown (pointer mapping).
+bool port_portrait_take_canvas(void);
+void port_portrait_presented(bool canvas);
+// The forecast pages are showing on the canvas (the game calls it every
+// frame): a one-finger swipe up / down turns the page (kpad.c).
+void port_portrait_pages(void);
+bool port_portrait_pages_showing(void);
 
 // Frame-time accounting for the periodic "perf:" log line (platform.c).
 enum {
