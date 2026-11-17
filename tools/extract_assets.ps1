@@ -22,6 +22,10 @@ try {
         & $dtk vfs cp --no-decompress -q "${app}:" (Join-Path $out "000000$n\")
         if ($LASTEXITCODE) { throw "dtk failed on $app" }
     }
+    # The DOL: the port reads the tables the decomp compiles in on the Wii from it.
+    $dol = Join-Path $Contents "00000001.app"
+    if (-not (Test-Path $dol)) { throw "Missing $dol (the HAFE v7 channel contents)." }
+    Copy-Item $dol (Join-Path $out "00000001.app")
     $count = (Get-ChildItem $out -Recurse -File).Count
     "assets: $count files in $out"
 } finally {

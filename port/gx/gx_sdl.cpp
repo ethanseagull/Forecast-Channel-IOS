@@ -19,7 +19,26 @@
 #include "gx_internal.h"
 #include "gx_tex_decode.h"
 #include "gx_texcodec.h"
+// Shaders: DXIL (D3D12) on Windows, committed; MSL (Metal) on Apple,
+// generated from the same HLSL at build time (tools/build_shaders_msl.sh,
+// header in the build tree).
+#ifdef __APPLE__
+#include "gx_shaders_msl.h"
+#define GX_SHADER_FORMAT SDL_GPU_SHADERFORMAT_MSL
+#define GX_SHADER_ENTRY "main0"
+#define GX_VS_CODE gx_vs_msl
+#define GX_VS_SIZE (sizeof(gx_vs_msl) - 1)
+#define GX_PS_CODE gx_ps_msl
+#define GX_PS_SIZE (sizeof(gx_ps_msl) - 1)
+#else
 #include "shaders/gx_shaders_dxil.h"
+#define GX_SHADER_FORMAT SDL_GPU_SHADERFORMAT_DXIL
+#define GX_SHADER_ENTRY "main"
+#define GX_VS_CODE gx_vs_dxil
+#define GX_VS_SIZE sizeof(gx_vs_dxil)
+#define GX_PS_CODE gx_ps_dxil
+#define GX_PS_SIZE sizeof(gx_ps_dxil)
+#endif
 #include <port_log.h>
 #include <port_platform.h>
 
@@ -408,8 +427,10 @@ static SDL_GPUTexture* get_texture(int map, const GXTexDesc& d) {
     if (t.waiting >= 0) {
         GXPackImage* img = gx_texpack_take(t.waiting);
         if (img != NULL) {
-            SDL_GPUTexture* nt = img->bc1 ? upload_bc1(img->data.data(), img->w / 4, img->h / 4)
-                                          : upload_rgba(img->data.data(), img->w, img->h, img->w * 4);
+            // w == 0: the PNG could not be loaded; keep the Wii image.
+            SDL_GPUTexture* nt = img->w == 0 ? NULL
+                                 : img->bc1  ? upload_bc1(img->data.data(), img->w / 4, img->h / 4)
+                                             : upload_rgba(img->data.data(), img->w, img->h, img->w * 4);
             if (nt != NULL) {
                 set_gpu_texture(t, nt);
             }
@@ -973,8 +994,8 @@ static SDL_GPUShader* make_shader(const u8* code, size_t size, SDL_GPUShaderStag
     SDL_GPUShaderCreateInfo si = {};
     si.code = code;
     si.code_size = size;
-    si.entrypoint = "main";
-    si.format = SDL_GPU_SHADERFORMAT_DXIL;
+    si.entrypoint = GX_SHADER_ENTRY;
+    si.format = GX_SHADER_FORMAT;
     si.stage = stage;
     si.num_samplers = samplers;
     si.num_uniform_buffers = uniforms;
@@ -994,7 +1015,7 @@ extern "C" void port_gx_backend_init(void) {
 #else
     bool debug = true;
 #endif
-    sDev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_DXIL, debug, NULL);
+    sDev = SDL_CreateGPUDevice(GX_SHADER_FORMAT, debug, NULL);
     if (sDev == NULL) {
         port_log("gx: SDL_CreateGPUDevice failed: %s\n", SDL_GetError());
         abort();
@@ -1011,8 +1032,8 @@ extern "C" void port_gx_backend_init(void) {
                     ? SDL_GPU_TEXTUREFORMAT_D24_UNORM
                     : SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 
-    sVS = make_shader(gx_vs_dxil, sizeof(gx_vs_dxil), SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
-    sPS = make_shader(gx_ps_dxil, sizeof(gx_ps_dxil), SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1);
+    sVS = make_shader((const u8*)GX_VS_CODE, GX_VS_SIZE, SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+    sPS = make_shader((const u8*)GX_PS_CODE, GX_PS_SIZE, SDL_GPU_SHADERSTAGE_FRAGMENT, 8, 1);
     if (sVS == NULL || sPS == NULL) {
         abort();
     }

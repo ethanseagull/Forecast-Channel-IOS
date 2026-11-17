@@ -106,3 +106,30 @@ s32 NANDWrite(NANDFileInfo* info, const void* buf, u32 len) {
     fflush(f);
     return n;
 }
+
+// Referenced only through nw4r::ut::NandFileStream's vtable, which the channel
+// never uses: fail.
+s32 NANDGetLength(NANDFileInfo* info, u32* length) {
+    (void)info;
+    *length = 0;
+    return NAND_RESULT_FATAL_ERROR;
+}
+
+s32 NANDReadAsync(NANDFileInfo* info, void* buf, u32 len, NANDAsyncCallback callback, NANDCommandBlock* block) {
+    (void)info;
+    (void)buf;
+    (void)len;
+    (void)callback;
+    (void)block;
+    return NAND_RESULT_FATAL_ERROR;
+}
+
+s32 NANDWriteAsync(NANDFileInfo* info, const void* buf, u32 len, NANDAsyncCallback callback,
+                   NANDCommandBlock* block) {
+    (void)info;
+    (void)buf;
+    (void)len;
+    (void)callback;
+    (void)block;
+    return NAND_RESULT_FATAL_ERROR;
+}

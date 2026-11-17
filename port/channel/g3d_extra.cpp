@@ -15,3 +15,18 @@ void AnmObj::Release() {
 
 } // namespace g3d
 } // namespace nw4r
+
+#include <nw4r/ut/ut_FileStream.h>
+
+namespace nw4r {
+namespace ut {
+
+// The base class's Seek: CodeWarrior stripped it (the derived streams the
+// channel never uses override it); Clang's vtables still reference it.
+void FileStream::Seek(s32 offset, u32 origin) {
+    (void)offset;
+    (void)origin;
+}
+
+} // namespace ut
+} // namespace nw4r

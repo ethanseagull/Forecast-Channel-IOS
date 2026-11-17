@@ -20,3 +20,6 @@ out/
 
 # Python caches
 __pycache__/
+
+# The Wii common key (nus_fetch.ps1): never commit
+common-key.txt

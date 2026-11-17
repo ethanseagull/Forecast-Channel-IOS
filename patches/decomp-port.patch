@@ -1,4 +1,30 @@
-﻿diff --git a/include/channel/WeatherScene.h b/include/channel/WeatherScene.h
+﻿diff --git a/include/channel/GlobeDots.h b/include/channel/GlobeDots.h
+index e32f7fc..db0fb3d 100644
+--- a/include/channel/GlobeDots.h
++++ b/include/channel/GlobeDots.h
+@@ -7,10 +7,17 @@
+ 
+ // The dot tables (GlobeDotsTable.cpp)
+ extern "C" {
+-extern const u8 gGlobeDotPositions[GLOBE_DOT_COUNT * 4]; // u16 longitude, u16 latitude per dot
+-extern const u8 gGlobeDotSizes[GLOBE_DOT_COUNT];
+-extern const u8 gGlobeDotColorIndices[GLOBE_DOT_COUNT];
+-extern const u8 gGlobeDotColors[GLOBE_DOT_COUNT * 3];   // RGB8, indexed by gGlobeDotColorIndices
++// The tables are read-only DOL data; the port fills them at start-up from
++// the user's DOL (port/sdk/dolfile.c), so there they are writable.
++#ifdef FORECAST_PORT
++#define GLOBE_DOT_TABLE
++#else
++#define GLOBE_DOT_TABLE const
++#endif
++extern GLOBE_DOT_TABLE u8 gGlobeDotPositions[GLOBE_DOT_COUNT * 4]; // u16 longitude, u16 latitude per dot
++extern GLOBE_DOT_TABLE u8 gGlobeDotSizes[GLOBE_DOT_COUNT];
++extern GLOBE_DOT_TABLE u8 gGlobeDotColorIndices[GLOBE_DOT_COUNT];
++extern GLOBE_DOT_TABLE u8 gGlobeDotColors[GLOBE_DOT_COUNT * 3];   // RGB8, indexed by gGlobeDotColorIndices
+ }
+ 
+ // Textured dots on the globe, one triangle per location. They fade out while the globe is moving.
+diff --git a/include/channel/WeatherScene.h b/include/channel/WeatherScene.h
 index b26a3bd..9399170 100644
 --- a/include/channel/WeatherScene.h
 +++ b/include/channel/WeatherScene.h
@@ -1501,6 +1527,24 @@ index e9c4213..dd9f109 100644
      }
      GXEnd();
  }
+diff --git a/src/ErrorLayoutArc.cpp b/src/ErrorLayoutArc.cpp
+index 4cbe9ef..86dac20 100644
+--- a/src/ErrorLayoutArc.cpp
++++ b/src/ErrorLayoutArc.cpp
+@@ -3,7 +3,13 @@
+ #include <types.h>
+ 
+ extern "C" {
++#ifdef FORECAST_PORT
++// Nintendo data: not compiled in. Read from the user's DOL at start-up
++// (port/sdk/dolfile.c).
++u8 gErrorLayoutArc[0x175C0] ATTRIBUTE_ALIGN(32);
++#else
+ u8 gErrorLayoutArc[] ATTRIBUTE_ALIGN(32) = {
+ #include "assets/error_layout.arc.inc"
+ };
++#endif
+ }
 diff --git a/src/ForecastCheck.cpp b/src/ForecastCheck.cpp
 index c1b8c71..5846eee 100644
 --- a/src/ForecastCheck.cpp
@@ -1571,6 +1615,31 @@ index a680f42..2706b41 100644
  
  // One texture of a weather icon
  struct IconLayer {
+diff --git a/src/GlobeDotsTable.cpp b/src/GlobeDotsTable.cpp
+index ed0a2f4..1a3546f 100644
+--- a/src/GlobeDotsTable.cpp
++++ b/src/GlobeDotsTable.cpp
+@@ -3,6 +3,14 @@
+ #include <channel/GlobeDots.h>
+ 
+ extern "C" {
++#ifdef FORECAST_PORT
++// Nintendo data: not compiled in. Read from the user's DOL at start-up
++// (port/sdk/dolfile.c).
++u8 gGlobeDotPositions[GLOBE_DOT_COUNT * 4];
++u8 gGlobeDotSizes[GLOBE_DOT_COUNT];
++u8 gGlobeDotColorIndices[GLOBE_DOT_COUNT];
++u8 gGlobeDotColors[GLOBE_DOT_COUNT * 3];
++#else
+ const u8 gGlobeDotPositions[GLOBE_DOT_COUNT * 4] = {
+ #include "assets/globe_dot_positions.inc"
+ };
+@@ -18,4 +26,5 @@ const u8 gGlobeDotColorIndices[GLOBE_DOT_COUNT] = {
+ const u8 gGlobeDotColors[GLOBE_DOT_COUNT * 3] = {
+ #include "assets/globe_dot_colors.inc"
+ };
++#endif
+ }
 diff --git a/src/LayoutButton.cpp b/src/LayoutButton.cpp
 index a1af741..615d315 100644
 --- a/src/LayoutButton.cpp
@@ -1793,7 +1862,7 @@ index 4b30a36..b960602 100644
      file.Bind();
      mResMdl = file.GetResMdl(0);
 diff --git a/src/System.cpp b/src/System.cpp
-index 8a3b2b2..b70968f 100644
+index 8a3b2b2..1a63fda 100644
 --- a/src/System.cpp
 +++ b/src/System.cpp
 @@ -62,9 +62,9 @@ void SystemInit(void) {
@@ -1851,7 +1920,7 @@ index 8a3b2b2..b70968f 100644
      GXEnd();
  }
  
-@@ -1242,6 +1251,71 @@ void MEM2Free(void* block) {
+@@ -1242,6 +1251,73 @@ void MEM2Free(void* block) {
      MEMFreeToExpHeap(gMEM2Heap, block);
  }
  
@@ -1873,7 +1942,9 @@ index 8a3b2b2..b70968f 100644
 +
 +static void* PortNew(size_t size, s32 align) {
 +    // malloc aligns to 16; larger alignments (the channel's new (-32)) stay in MEM1.
-+    if (gMEM1Heap == NULL || (size >= PORT_NEW_HOST_MIN && align >= -16 && align <= 16)) {
++    // Port threads (texture loaders, audio) never use the MEM heaps: they are
++    // not thread-safe. Their blocks come from the C heap (freed by address).
++    if (gMEM1Heap == NULL || port_is_host_thread() || (size >= PORT_NEW_HOST_MIN && align >= -16 && align <= 16)) {
 +        return malloc(size != 0 ? size : 1);
 +    }
 +    void* p = MEMAllocFromExpHeapEx(gMEM1Heap, size, align < 16 ? 16 : align);
@@ -1923,7 +1994,7 @@ index 8a3b2b2..b70968f 100644
  void* operator new(size_t size) {
      return MEMAllocFromExpHeapEx(gMEM1Heap, size, 4);
  }
-@@ -1261,6 +1335,7 @@ void operator delete(void* block) {
+@@ -1261,6 +1337,7 @@ void operator delete(void* block) {
  void operator delete[](void* block) {
      MEMFreeToExpHeap(gMEM1Heap, block);
  }

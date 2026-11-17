@@ -76,19 +76,29 @@ def main():
         '// Unported SDK functions log once via port_stub_hit and return 0.',
         'void port_stub_hit(const char* name);',
         '',
+        '// Symbol names: Mach-O (iOS, macOS) prefixes C symbols with an underscore.',
+        '#ifdef __APPLE__',
+        '#define PORT_SYM(name) "_" name',
+        '#else',
+        '#define PORT_SYM(name) name',
+        '#endif',
+        '',
     ]
     if aliases:
         lines.append('// Globals declared with a different type or linkage than their definition.')
+        lines.append("// MSVC mangling encodes a global's type; Itanium (Apple) does not.")
+        lines.append('#ifdef _WIN32')
         for s, t in aliases:
             lines.append('#pragma comment(linker, "/alternatename:%s=%s")' % (c_str(s), c_str(t)))
+        lines.append('#endif')
         lines.append('')
     for i, s in enumerate(datas):
-        lines.append('__attribute__((used, aligned(32))) char port_stub_data_%d[256] __asm__("%s");' % (i, c_str(s)))
+        lines.append('__attribute__((used, aligned(32))) char port_stub_data_%d[256] __asm__(PORT_SYM("%s"));' % (i, c_str(s)))
     if datas:
         lines.append('')
     for i, s in enumerate(funcs):
         lines += [
-            'long long port_stub_%d(void) __asm__("%s");' % (i, c_str(s)),
+            'long long port_stub_%d(void) __asm__(PORT_SYM("%s"));' % (i, c_str(s)),
             'long long port_stub_%d(void) {' % i,
             '    port_stub_hit("%s");' % c_str(s),
             '    return 0;',

@@ -34,6 +34,10 @@ static PortThread* port_thread(OSThread* t) { return (PortThread*)&t->context; }
 
 static OSThread sMainThread;
 static _Thread_local OSThread* sCurrentThread;
+static _Thread_local int sHostThread;
+
+void port_mark_host_thread(void) { sHostThread = 1; }
+int port_is_host_thread(void) { return sHostThread; }
 
 OSThread* OSGetCurrentThread(void) {
     return sCurrentThread != NULL ? sCurrentThread : &sMainThread;

@@ -127,6 +127,9 @@ static int frame_thread(void* arg) {
     (void)arg;
     s16 buf[FRAME_SAMPLES * 2];
     SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_TIME_CRITICAL);
+    // nw4r::snd's frame callback runs here: keep any operator new it does off
+    // the channel's (single-threaded) MEM heaps.
+    port_mark_host_thread();
 
     if (sStream != NULL) {
         for (int i = 0; i < sTarget; i++) {

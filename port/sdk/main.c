@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include <port_log.h>
+#include <port_import.h>
 #include <port_paths.h>
 #include <port_platform.h>
 
@@ -23,7 +24,14 @@ void port_paths_init(void) {
             sDataDir[n + 1] = 0;
         }
     } else {
+#ifdef SDL_PLATFORM_IOS
+        // The app's Documents folder: the user copies the channel's files
+        // there with the Files app (UIFileSharingEnabled).
+        const char* docs = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+        SDL_snprintf(sDataDir, sizeof(sDataDir), "%s", docs != NULL ? docs : SDL_GetPrefPath("ForecastOS", "ForecastOS"));
+#else
         SDL_snprintf(sDataDir, sizeof(sDataDir), "%sdata/", SDL_GetBasePath());
+#endif
     }
     SDL_CreateDirectory(sDataDir);
 }
@@ -53,6 +61,8 @@ int main(int argc, char** argv) {
     port_log_open();
     port_log("ForecastOS: Forecast Channel host port (%s, %d-bit)\n", SDL_GetPlatform(), (int)sizeof(void*) * 8);
     port_log("data: %s\n", port_data_dir());
+    port_import_contents();
+    port_load_dol_data();
     if (!port_platform_init()) {
         return 1;
     }

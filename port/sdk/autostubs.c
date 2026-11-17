@@ -3,344 +3,289 @@
 // Unported SDK functions log once via port_stub_hit and return 0.
 void port_stub_hit(const char* name);
 
+// Symbol names: Mach-O (iOS, macOS) prefixes C symbols with an underscore.
+#ifdef __APPLE__
+#define PORT_SYM(name) "_" name
+#else
+#define PORT_SYM(name) name
+#endif
+
 // Globals declared with a different type or linkage than their definition.
+// MSVC mangling encodes a global's type; Itanium (Apple) does not.
+#ifdef _WIN32
 #pragma comment(linker, "/alternatename:?gCommonTpl@@3PEAUTPLPalette@@EA=gCommonTpl")
 #pragma comment(linker, "/alternatename:?gDragScroll@@3PAMA=?gDragScroll@@3UDragScroll@@A")
 #pragma comment(linker, "/alternatename:?gGlobeRotation@@3UVec@@A=?gGlobeRotation@@3VVec3@@A")
 #pragma comment(linker, "/alternatename:?gModelMtx@@3UMTX34@math@nw4r@@A=?gModelMtx@@3VMtx34@@A")
 #pragma comment(linker, "/alternatename:?gSysFont@@3PEAVFont@ut@nw4r@@EA=?gSysFont@@3PEAVArchiveFont@ut@nw4r@@EA")
+#endif
 
-long long port_stub_0(void) __asm__("??0NandFileStream@ut@nw4r@@QEAA@PEBDI@Z");
-long long port_stub_0(void) {
-    port_stub_hit("??0NandFileStream@ut@nw4r@@QEAA@PEBDI@Z");
-    return 0;
-}
-long long port_stub_1(void) __asm__("??0NandFileStream@ut@nw4r@@QEAA@PEBUNANDFileInfo@@I_N@Z");
-long long port_stub_1(void) {
-    port_stub_hit("??0NandFileStream@ut@nw4r@@QEAA@PEBUNANDFileInfo@@I_N@Z");
-    return 0;
-}
-long long port_stub_2(void) __asm__("??1NandFileStream@ut@nw4r@@UEAA@XZ");
-long long port_stub_2(void) {
-    port_stub_hit("??1NandFileStream@ut@nw4r@@UEAA@XZ");
-    return 0;
-}
-long long port_stub_3(void) __asm__("?Close@NandFileStream@ut@nw4r@@UEAAXXZ");
-long long port_stub_3(void) {
-    port_stub_hit("?Close@NandFileStream@ut@nw4r@@UEAAXXZ");
-    return 0;
-}
-long long port_stub_4(void) __asm__("?GetResColorAnmResult@detail@g3d@nw4r@@YAIPEBUResColorAnmFramesData@23@M@Z");
-long long port_stub_4(void) {
-    port_stub_hit("?GetResColorAnmResult@detail@g3d@nw4r@@YAIPEBUResColorAnmFramesData@23@M@Z");
-    return 0;
-}
-long long port_stub_5(void) __asm__("?GetResKeyFrameAnmResult@detail@g3d@nw4r@@YAMPEBUResKeyFrameAnmData@23@M@Z");
-long long port_stub_5(void) {
-    port_stub_hit("?GetResKeyFrameAnmResult@detail@g3d@nw4r@@YAMPEBUResKeyFrameAnmData@23@M@Z");
-    return 0;
-}
-long long port_stub_6(void) __asm__("?Read@NandFileStream@ut@nw4r@@UEAAHPEAXI@Z");
-long long port_stub_6(void) {
-    port_stub_hit("?Read@NandFileStream@ut@nw4r@@UEAAHPEAXI@Z");
-    return 0;
-}
-long long port_stub_7(void) __asm__("?ReadAsync@NandFileStream@ut@nw4r@@UEAA_NPEAXIP6AXHPEAVIOStream@23@0@Z0@Z");
-long long port_stub_7(void) {
-    port_stub_hit("?ReadAsync@NandFileStream@ut@nw4r@@UEAA_NPEAXIP6AXHPEAVIOStream@23@0@Z0@Z");
-    return 0;
-}
-long long port_stub_8(void) __asm__("?Seek@FileStream@ut@nw4r@@UEAAXHI@Z");
-long long port_stub_8(void) {
-    port_stub_hit("?Seek@FileStream@ut@nw4r@@UEAAXHI@Z");
-    return 0;
-}
-long long port_stub_9(void) __asm__("?Seek@NandFileStream@ut@nw4r@@UEAAXHI@Z");
-long long port_stub_9(void) {
-    port_stub_hit("?Seek@NandFileStream@ut@nw4r@@UEAAXHI@Z");
-    return 0;
-}
-long long port_stub_10(void) __asm__("?Write@NandFileStream@ut@nw4r@@UEAAXPEBXI@Z");
-long long port_stub_10(void) {
-    port_stub_hit("?Write@NandFileStream@ut@nw4r@@UEAAXPEBXI@Z");
-    return 0;
-}
-long long port_stub_11(void) __asm__("?WriteAsync@NandFileStream@ut@nw4r@@UEAA_NPEBXIP6AXHPEAVIOStream@23@PEAX@Z2@Z");
-long long port_stub_11(void) {
-    port_stub_hit("?WriteAsync@NandFileStream@ut@nw4r@@UEAA_NPEBXIP6AXHPEAVIOStream@23@PEAX@Z2@Z");
-    return 0;
-}
-long long port_stub_12(void) __asm__("?typeInfo@NandFileStream@ut@nw4r@@2URuntimeTypeInfo@detail@23@A");
-long long port_stub_12(void) {
-    port_stub_hit("?typeInfo@NandFileStream@ut@nw4r@@2URuntimeTypeInfo@detail@23@A");
-    return 0;
-}
-long long port_stub_58(void) __asm__("DCFlushRange");
+long long port_stub_58(void) __asm__(PORT_SYM("DCFlushRange"));
 long long port_stub_58(void) {
     port_stub_hit("DCFlushRange");
     return 0;
 }
-long long port_stub_59(void) __asm__("DCStoreRange");
+long long port_stub_59(void) __asm__(PORT_SYM("DCStoreRange"));
 long long port_stub_59(void) {
     port_stub_hit("DCStoreRange");
     return 0;
 }
-long long port_stub_60(void) __asm__("DCStoreRangeNoSync");
+long long port_stub_60(void) __asm__(PORT_SYM("DCStoreRangeNoSync"));
 long long port_stub_60(void) {
     port_stub_hit("DCStoreRangeNoSync");
     return 0;
 }
-long long port_stub_61(void) __asm__("DVDCancel");
+long long port_stub_61(void) __asm__(PORT_SYM("DVDCancel"));
 long long port_stub_61(void) {
     port_stub_hit("DVDCancel");
     return 0;
 }
-long long port_stub_62(void) __asm__("DVDCancelAsync");
+long long port_stub_62(void) __asm__(PORT_SYM("DVDCancelAsync"));
 long long port_stub_62(void) {
     port_stub_hit("DVDCancelAsync");
     return 0;
 }
-long long port_stub_63(void) __asm__("DVDClose");
+long long port_stub_63(void) __asm__(PORT_SYM("DVDClose"));
 long long port_stub_63(void) {
     port_stub_hit("DVDClose");
     return 0;
 }
-long long port_stub_64(void) __asm__("DVDConvertPathToEntrynum");
+long long port_stub_64(void) __asm__(PORT_SYM("DVDConvertPathToEntrynum"));
 long long port_stub_64(void) {
     port_stub_hit("DVDConvertPathToEntrynum");
     return 0;
 }
-long long port_stub_65(void) __asm__("DVDFastOpen");
+long long port_stub_65(void) __asm__(PORT_SYM("DVDFastOpen"));
 long long port_stub_65(void) {
     port_stub_hit("DVDFastOpen");
     return 0;
 }
-long long port_stub_66(void) __asm__("DVDGetDriveStatus");
+long long port_stub_66(void) __asm__(PORT_SYM("DVDGetDriveStatus"));
 long long port_stub_66(void) {
     port_stub_hit("DVDGetDriveStatus");
     return 0;
 }
-long long port_stub_67(void) __asm__("DVDReadAsyncPrio");
+long long port_stub_67(void) __asm__(PORT_SYM("DVDReadAsyncPrio"));
 long long port_stub_67(void) {
     port_stub_hit("DVDReadAsyncPrio");
     return 0;
 }
-long long port_stub_68(void) __asm__("DVDReadPrio");
+long long port_stub_68(void) __asm__(PORT_SYM("DVDReadPrio"));
 long long port_stub_68(void) {
     port_stub_hit("DVDReadPrio");
     return 0;
 }
-long long port_stub_69(void) __asm__("GXClearGPMetric");
+long long port_stub_69(void) __asm__(PORT_SYM("GXClearGPMetric"));
 long long port_stub_69(void) {
     port_stub_hit("GXClearGPMetric");
     return 0;
 }
-long long port_stub_70(void) __asm__("GXSetGPMetric");
+long long port_stub_70(void) __asm__(PORT_SYM("GXSetGPMetric"));
 long long port_stub_70(void) {
     port_stub_hit("GXSetGPMetric");
     return 0;
 }
-long long port_stub_71(void) __asm__("HBMStartBlackOut");
+long long port_stub_71(void) __asm__(PORT_SYM("HBMStartBlackOut"));
 long long port_stub_71(void) {
     port_stub_hit("HBMStartBlackOut");
     return 0;
 }
-long long port_stub_78(void) __asm__("LCDisable");
+long long port_stub_78(void) __asm__(PORT_SYM("LCDisable"));
 long long port_stub_78(void) {
     port_stub_hit("LCDisable");
     return 0;
 }
-long long port_stub_79(void) __asm__("LCEnable");
+long long port_stub_79(void) __asm__(PORT_SYM("LCEnable"));
 long long port_stub_79(void) {
     port_stub_hit("LCEnable");
     return 0;
 }
-long long port_stub_80(void) __asm__("LCLoadBlocks");
+long long port_stub_80(void) __asm__(PORT_SYM("LCLoadBlocks"));
 long long port_stub_80(void) {
     port_stub_hit("LCLoadBlocks");
     return 0;
 }
-long long port_stub_81(void) __asm__("LCStoreBlocks");
+long long port_stub_81(void) __asm__(PORT_SYM("LCStoreBlocks"));
 long long port_stub_81(void) {
     port_stub_hit("LCStoreBlocks");
     return 0;
 }
-long long port_stub_82(void) __asm__("LCStoreData");
+long long port_stub_82(void) __asm__(PORT_SYM("LCStoreData"));
 long long port_stub_82(void) {
     port_stub_hit("LCStoreData");
     return 0;
 }
-long long port_stub_83(void) __asm__("MEMFreeByStateToFrmHeap");
+long long port_stub_83(void) __asm__(PORT_SYM("MEMFreeByStateToFrmHeap"));
 long long port_stub_83(void) {
     port_stub_hit("MEMFreeByStateToFrmHeap");
     return 0;
 }
-long long port_stub_84(void) __asm__("MEMRecordStateForFrmHeap");
+long long port_stub_84(void) __asm__(PORT_SYM("MEMRecordStateForFrmHeap"));
 long long port_stub_84(void) {
     port_stub_hit("MEMRecordStateForFrmHeap");
     return 0;
 }
-long long port_stub_85(void) __asm__("NANDDelete");
+long long port_stub_85(void) __asm__(PORT_SYM("NANDDelete"));
 long long port_stub_85(void) {
     port_stub_hit("NANDDelete");
     return 0;
 }
-long long port_stub_86(void) __asm__("NANDGetCurrentDir");
+long long port_stub_86(void) __asm__(PORT_SYM("NANDGetCurrentDir"));
 long long port_stub_86(void) {
     port_stub_hit("NANDGetCurrentDir");
     return 0;
 }
-long long port_stub_87(void) __asm__("NANDSeek");
+long long port_stub_87(void) __asm__(PORT_SYM("NANDSeek"));
 long long port_stub_87(void) {
     port_stub_hit("NANDSeek");
     return 0;
 }
-long long port_stub_88(void) __asm__("NETGetStartupErrorCode");
+long long port_stub_88(void) __asm__(PORT_SYM("NETGetStartupErrorCode"));
 long long port_stub_88(void) {
     port_stub_hit("NETGetStartupErrorCode");
     return 0;
 }
-long long port_stub_116(void) __asm__("NWC24iRequestShutdownSync");
+long long port_stub_116(void) __asm__(PORT_SYM("NWC24iRequestShutdownSync"));
 long long port_stub_116(void) {
     port_stub_hit("NWC24iRequestShutdownSync");
     return 0;
 }
-long long port_stub_117(void) __asm__("OSGetResetButtonState");
+long long port_stub_117(void) __asm__(PORT_SYM("OSGetResetButtonState"));
 long long port_stub_117(void) {
     port_stub_hit("OSGetResetButtonState");
     return 0;
 }
-long long port_stub_118(void) __asm__("OSRegisterShutdownFunction");
+long long port_stub_118(void) __asm__(PORT_SYM("OSRegisterShutdownFunction"));
 long long port_stub_118(void) {
     port_stub_hit("OSRegisterShutdownFunction");
     return 0;
 }
-long long port_stub_119(void) __asm__("OSRegisterVersion");
+long long port_stub_119(void) __asm__(PORT_SYM("OSRegisterVersion"));
 long long port_stub_119(void) {
     port_stub_hit("OSRegisterVersion");
     return 0;
 }
-long long port_stub_120(void) __asm__("OSRestart");
+long long port_stub_120(void) __asm__(PORT_SYM("OSRestart"));
 long long port_stub_120(void) {
     port_stub_hit("OSRestart");
     return 0;
 }
-long long port_stub_122(void) __asm__("OSSetPowerCallback");
+long long port_stub_122(void) __asm__(PORT_SYM("OSSetPowerCallback"));
 long long port_stub_122(void) {
     port_stub_hit("OSSetPowerCallback");
     return 0;
 }
-long long port_stub_123(void) __asm__("OSSetResetCallback");
+long long port_stub_123(void) __asm__(PORT_SYM("OSSetResetCallback"));
 long long port_stub_123(void) {
     port_stub_hit("OSSetResetCallback");
     return 0;
 }
-long long port_stub_124(void) __asm__("OSShutdownSystem");
+long long port_stub_124(void) __asm__(PORT_SYM("OSShutdownSystem"));
 long long port_stub_124(void) {
     port_stub_hit("OSShutdownSystem");
     return 0;
 }
-long long port_stub_125(void) __asm__("PPCMfhid2");
+long long port_stub_125(void) __asm__(PORT_SYM("PPCMfhid2"));
 long long port_stub_125(void) {
     port_stub_hit("PPCMfhid2");
     return 0;
 }
-long long port_stub_126(void) __asm__("PPCMfhid4");
+long long port_stub_126(void) __asm__(PORT_SYM("PPCMfhid4"));
 long long port_stub_126(void) {
     port_stub_hit("PPCMfhid4");
     return 0;
 }
-long long port_stub_127(void) __asm__("PPCMthid2");
+long long port_stub_127(void) __asm__(PORT_SYM("PPCMthid2"));
 long long port_stub_127(void) {
     port_stub_hit("PPCMthid2");
     return 0;
 }
-long long port_stub_128(void) __asm__("PPCMthid4");
+long long port_stub_128(void) __asm__(PORT_SYM("PPCMthid4"));
 long long port_stub_128(void) {
     port_stub_hit("PPCMthid4");
     return 0;
 }
-long long port_stub_129(void) __asm__("PPCMtwpar");
+long long port_stub_129(void) __asm__(PORT_SYM("PPCMtwpar"));
 long long port_stub_129(void) {
     port_stub_hit("PPCMtwpar");
     return 0;
 }
-long long port_stub_130(void) __asm__("SCFlushSync");
+long long port_stub_130(void) __asm__(PORT_SYM("SCFlushSync"));
 long long port_stub_130(void) {
     port_stub_hit("SCFlushSync");
     return 0;
 }
-long long port_stub_133(void) __asm__("SCSetLanguage");
+long long port_stub_133(void) __asm__(PORT_SYM("SCSetLanguage"));
 long long port_stub_133(void) {
     port_stub_hit("SCSetLanguage");
     return 0;
 }
-long long port_stub_134(void) __asm__("SOInit");
+long long port_stub_134(void) __asm__(PORT_SYM("SOInit"));
 long long port_stub_134(void) {
     port_stub_hit("SOInit");
     return 0;
 }
-long long port_stub_135(void) __asm__("SOStartup");
+long long port_stub_135(void) __asm__(PORT_SYM("SOStartup"));
 long long port_stub_135(void) {
     port_stub_hit("SOStartup");
     return 0;
 }
-long long port_stub_145(void) __asm__("VIGetDTVStatus");
+long long port_stub_145(void) __asm__(PORT_SYM("VIGetDTVStatus"));
 long long port_stub_145(void) {
     port_stub_hit("VIGetDTVStatus");
     return 0;
 }
-long long port_stub_146(void) __asm__("VIGetNextField");
+long long port_stub_146(void) __asm__(PORT_SYM("VIGetNextField"));
 long long port_stub_146(void) {
     port_stub_hit("VIGetNextField");
     return 0;
 }
-long long port_stub_147(void) __asm__("VIGetScanMode");
+long long port_stub_147(void) __asm__(PORT_SYM("VIGetScanMode"));
 long long port_stub_147(void) {
     port_stub_hit("VIGetScanMode");
     return 0;
 }
-long long port_stub_148(void) __asm__("VIGetTvFormat");
+long long port_stub_148(void) __asm__(PORT_SYM("VIGetTvFormat"));
 long long port_stub_148(void) {
     port_stub_hit("VIGetTvFormat");
     return 0;
 }
-long long port_stub_149(void) __asm__("WENCGetEncodeData");
+long long port_stub_149(void) __asm__(PORT_SYM("WENCGetEncodeData"));
 long long port_stub_149(void) {
     port_stub_hit("WENCGetEncodeData");
     return 0;
 }
-long long port_stub_150(void) __asm__("WPADCanSendStreamData");
+long long port_stub_150(void) __asm__(PORT_SYM("WPADCanSendStreamData"));
 long long port_stub_150(void) {
     port_stub_hit("WPADCanSendStreamData");
     return 0;
 }
-long long port_stub_151(void) __asm__("WPADControlMotor");
+long long port_stub_151(void) __asm__(PORT_SYM("WPADControlMotor"));
 long long port_stub_151(void) {
     port_stub_hit("WPADControlMotor");
     return 0;
 }
-long long port_stub_152(void) __asm__("WPADControlSpeaker");
+long long port_stub_152(void) __asm__(PORT_SYM("WPADControlSpeaker"));
 long long port_stub_152(void) {
     port_stub_hit("WPADControlSpeaker");
     return 0;
 }
-long long port_stub_153(void) __asm__("WPADIsMotorEnabled");
+long long port_stub_153(void) __asm__(PORT_SYM("WPADIsMotorEnabled"));
 long long port_stub_153(void) {
     port_stub_hit("WPADIsMotorEnabled");
     return 0;
 }
-long long port_stub_154(void) __asm__("WPADRegisterAllocator");
+long long port_stub_154(void) __asm__(PORT_SYM("WPADRegisterAllocator"));
 long long port_stub_154(void) {
     port_stub_hit("WPADRegisterAllocator");
     return 0;
 }
-long long port_stub_155(void) __asm__("WPADSendStreamData");
+long long port_stub_155(void) __asm__(PORT_SYM("WPADSendStreamData"));
 long long port_stub_155(void) {
     port_stub_hit("WPADSendStreamData");
     return 0;
 }
-long long port_stub_156(void) __asm__("__GXAbort");
+long long port_stub_156(void) __asm__(PORT_SYM("__GXAbort"));
 long long port_stub_156(void) {
     port_stub_hit("__GXAbort");
     return 0;

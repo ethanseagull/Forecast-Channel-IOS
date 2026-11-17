@@ -17,6 +17,7 @@
 #include "gx_tex_decode.h"
 #include "gx_texcodec.h"
 #include <port_log.h>
+#include <port_mem.h>
 #include <port_paths.h>
 
 namespace {
@@ -225,9 +226,19 @@ const int kWorkers = 2;
 
 SDL_Mutex* sLock;
 SDL_Condition* sWake;
-std::vector<std::pair<s32, std::string>> sQueue; // (id, path) waiting for a worker
-std::unordered_map<s32, GXPackImage*> sReady;    // loaded, not yet taken
-std::unordered_map<s32, bool> sInFlight;         // queued or being decoded
+// Thread rules: workers are host threads (port_mark_host_thread), so what
+// they allocate comes from the C heap; they must never free anything the game
+// thread allocated (that may live in a MEM heap). So queue entries carry
+// their path inline, sReady entries are created by workers and removed by
+// the game thread, and sInFlight is touched by the game thread only.
+struct Job {
+    s32 id;
+    char path[512];
+};
+std::vector<Job> sQueue;                      // waiting for a worker (grown by the game thread)
+size_t sQueueHead;                            // next job to take
+std::unordered_map<s32, GXPackImage*> sReady; // loaded (w == 0: failed), not yet taken
+std::unordered_map<s32, bool> sInFlight;      // queued or being decoded (game thread only)
 SDL_AtomicInt sComp;                             // GX_TEXCOMP_*
 SDL_AtomicInt sCompressed;                       // statistics
 
@@ -249,10 +260,10 @@ bool binary_alpha(const SDL_Surface* s) {
     return true;
 }
 
-GXPackImage* load_png(const std::string& path) {
-    SDL_Surface* s = SDL_LoadPNG(path.c_str());
+GXPackImage* load_png(const char* path) {
+    SDL_Surface* s = SDL_LoadPNG(path);
     if (s == nullptr) {
-        port_log("texpack: cannot load %s: %s\n", path.c_str(), SDL_GetError());
+        port_log("texpack: cannot load %s: %s\n", path, SDL_GetError());
         return nullptr;
     }
     // Bytes R, G, B, A in memory, as the GPU texture expects.
@@ -283,23 +294,24 @@ GXPackImage* load_png(const std::string& path) {
 
 int SDLCALL worker(void* unused) {
     (void)unused;
+    port_mark_host_thread();
     for (;;) {
         SDL_LockMutex(sLock);
-        while (sQueue.empty()) {
+        while (sQueueHead == sQueue.size()) {
             SDL_WaitCondition(sWake, sLock);
         }
-        s32 id = sQueue.front().first;
-        std::string path = sQueue.front().second;
-        sQueue.erase(sQueue.begin());
+        Job job = sQueue[sQueueHead++];
         SDL_UnlockMutex(sLock);
 
-        GXPackImage* img = load_png(path);
+        GXPackImage* img = load_png(job.path);
+        if (img == nullptr) {
+            img = new GXPackImage; // failed: w == 0
+            img->w = img->h = 0;
+            img->bc1 = false;
+        }
 
         SDL_LockMutex(sLock);
-        sInFlight.erase(id);
-        if (img != nullptr) {
-            sReady[id] = img;
-        }
+        sReady[job.id] = img;
         SDL_UnlockMutex(sLock);
     }
     return 0;
@@ -331,12 +343,21 @@ void gx_texpack_request(s32 id) {
     if (sLock == nullptr) {
         start_workers();
     }
-    SDL_LockMutex(sLock);
-    if (sReady.find(id) == sReady.end() && sInFlight.find(id) == sInFlight.end()) {
-        sInFlight[id] = true;
-        sQueue.emplace_back(id, sPaths[id]);
-        SDL_SignalCondition(sWake);
+    if (sInFlight.find(id) != sInFlight.end()) {
+        return;
     }
+    sInFlight[id] = true;
+    Job job;
+    job.id = id;
+    SDL_strlcpy(job.path, sPaths[id].c_str(), sizeof(job.path));
+    SDL_LockMutex(sLock);
+    if (sQueueHead == sQueue.size()) {
+        // Everything taken: reuse the space (no worker holds a reference).
+        sQueue.clear();
+        sQueueHead = 0;
+    }
+    sQueue.push_back(job);
+    SDL_SignalCondition(sWake);
     SDL_UnlockMutex(sLock);
 }
 
@@ -345,12 +366,17 @@ GXPackImage* gx_texpack_take(s32 id) {
         return nullptr;
     }
     GXPackImage* img = nullptr;
+    bool done = false;
     SDL_LockMutex(sLock);
     auto it = sReady.find(id);
     if (it != sReady.end()) {
         img = it->second;
         sReady.erase(it);
+        done = true;
     }
     SDL_UnlockMutex(sLock);
+    if (done) {
+        sInFlight.erase(id);
+    }
     return img;
 }

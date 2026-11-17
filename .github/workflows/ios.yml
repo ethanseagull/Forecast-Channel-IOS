@@ -1,0 +1,61 @@
+# Builds the iOS app on a macOS runner and uploads an unsigned .ipa (the
+# sideloading tool signs it). No Nintendo data is involved: the decomp is
+# source only, and the user's channel files are imported by the app at run time.
+name: iOS
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: brew install glslang spirv-cross
+
+      - name: Decomp source (doldecomp/forecast + the port's patch)
+        run: |
+          git clone --quiet https://github.com/doldecomp/forecast.git forecast-decomp
+          git -C forecast-decomp checkout --quiet 92a5782
+          # The patch is kept with a BOM and CRLF line ends (Windows tools).
+          sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' patches/decomp-port.patch > "$RUNNER_TEMP/decomp-port.patch"
+          git -C forecast-decomp apply --whitespace=nowarn "$RUNNER_TEMP/decomp-port.patch"
+
+      - name: SDL3 source
+        run: git clone --quiet --depth 1 --branch release-3.4.20 https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+
+      - name: Metal shaders
+        run: sh tools/build_shaders_msl.sh build-ios/generated ios
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-ios -G Xcode
+          -DCMAKE_SYSTEM_NAME=iOS
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+          -DFORECAST_SDL_SOURCE="$RUNNER_TEMP/SDL"
+          -DFORECAST_MSL_DIR="$PWD/build-ios/generated"
+
+      - name: Build
+        run: >
+          cmake --build build-ios --config Release --
+          -sdk iphoneos CODE_SIGNING_ALLOWED=NO -quiet
+
+      - name: Package
+        run: |
+          app=$(find build-ios -type d -name ForecastOS.app -path '*Release-iphoneos*' | head -1)
+          test -n "$app"
+          mkdir -p Payload
+          cp -R "$app" Payload/
+          zip -qry ForecastOS.ipa Payload
+          ls -l ForecastOS.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForecastOS-ipa
+          path: ForecastOS.ipa
+          retention-days: 30

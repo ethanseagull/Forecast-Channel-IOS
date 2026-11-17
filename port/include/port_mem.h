@@ -37,6 +37,12 @@ const void* port_gx_ptr(uint32_t addr);
 // True if [p, p + size) lies in the arena or the image.
 int port_mem_readable(const void* p, size_t size);
 
+// Threads the port creates for itself (texture pack loaders, the audio frame
+// thread) call port_mark_host_thread. The channel's operator new serves them
+// from the C heap: its MEM heaps are not safe to use from several threads.
+void port_mark_host_thread(void);
+int port_is_host_thread(void);
+
 #ifdef __cplusplus
 }
 #endif
