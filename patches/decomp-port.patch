@@ -83,7 +83,7 @@ index b26a3bd..d8be398 100644
  #else
      ~ButtonColors() {}
 diff --git a/include/channel/WeatherViews.h b/include/channel/WeatherViews.h
-index 9696acd..44a18b7 100644
+index 9696acd..d903ea5 100644
 --- a/include/channel/WeatherViews.h
 +++ b/include/channel/WeatherViews.h
 @@ -32,6 +32,10 @@ public:
@@ -97,6 +97,30 @@ index 9696acd..44a18b7 100644
      void Calc();
      void Draw();
      BOOL IsDone();
+@@ -74,6 +78,10 @@ class ErrorWindow {
+ public:
+     ErrorWindow(void* arc);
+     ~ErrorWindow();
++#ifdef FORECAST_PORT
++    // Turning the phone: the three layouts made again for the new shape.
++    void RebuildLayouts(void* arc);
++#endif
+ 
+     void Open(s32 message);
+     void Calc();
+@@ -142,6 +150,12 @@ public:
+ 
+     WeatherAddress(void* arc);
+     ~WeatherAddress();
++#ifdef FORECAST_PORT
++    // Portrait (channel_portrait.h): the list's extent on the screen, and
++    // the layouts made again for a new window shape (turning the phone).
++    void PortraitGeometry();
++    void PortraitRelayout(void* arc);
++#endif
+ 
+     void Reset();
+     void Draw();
 diff --git a/include/macros.h b/include/macros.h
 index 23a63c4..cdb8a36 100644
 --- a/include/macros.h
@@ -1712,6 +1736,44 @@ index 4cbe9ef..86dac20 100644
  };
 +#endif
  }
+diff --git a/src/ErrorWindow.cpp b/src/ErrorWindow.cpp
+index b220389..d5f3566 100644
+--- a/src/ErrorWindow.cpp
++++ b/src/ErrorWindow.cpp
+@@ -155,9 +155,33 @@ ErrorWindow::ErrorWindow(void* arc) {
+     mYesNoLayout = new ButtonGroup(arc, "error3.brlyt", gButtonColors, false);
+     mSaveLayout = new ButtonGroup(arc, "error4.brlyt", gButtonColors, false);
+     mFatalLayout = new ButtonGroup(arc, "error2.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mYesNoLayout->ApplyPortrait("error3");
++    mSaveLayout->ApplyPortrait("error4");
++    mFatalLayout->ApplyPortrait("error2");
++#endif
+     Open(0);
+ }
+ 
++#ifdef FORECAST_PORT
++void ErrorWindow::RebuildLayouts(void* arc) {
++    delete mFatalLayout;
++    delete mSaveLayout;
++    delete mYesNoLayout;
++    mYesNoLayout = new ButtonGroup(arc, "error3.brlyt", gButtonColors, false);
++    mSaveLayout = new ButtonGroup(arc, "error4.brlyt", gButtonColors, false);
++    mFatalLayout = new ButtonGroup(arc, "error2.brlyt", gButtonColors, false);
++    mYesNoLayout->ApplyPortrait("error3");
++    mSaveLayout->ApplyPortrait("error4");
++    mFatalLayout->ApplyPortrait("error2");
++    // As Open leaves them, without starting the window again.
++    mYesNoLayout->FindButton("yes")->mPressed = TRUE;
++    mYesNoLayout->FindButton("no")->mPressed = TRUE;
++    mSaveLayout->FindButton("next")->mPressed = TRUE;
++    mFatalLayout->FindButton("next")->mPressed = TRUE;
++}
++#endif
++
+ ErrorWindow::~ErrorWindow() {
+     delete mFatalLayout;
+     delete mSaveLayout;
 diff --git a/src/ForecastCheck.cpp b/src/ForecastCheck.cpp
 index c1b8c71..5846eee 100644
 --- a/src/ForecastCheck.cpp
@@ -2235,10 +2297,152 @@ index 8a3b2b2..b93dab2 100644
  MEMiHeapHead* gMEM1Heap;
  u32 gMEM1FreeSize;
 diff --git a/src/WeatherAddress.cpp b/src/WeatherAddress.cpp
-index 1ce7d42..12f74e4 100644
+index 1ce7d42..0d26117 100644
 --- a/src/WeatherAddress.cpp
 +++ b/src/WeatherAddress.cpp
-@@ -740,7 +740,7 @@ BOOL WeatherAddress::UpdateCityList() {
+@@ -10,6 +10,18 @@
+ 
+ #include <wstring.h>
+ 
++#ifdef FORECAST_PORT
++// Portrait: the list runs from under the title to the button row
++// (PortraitGeometry); rows above the screen are hidden, not those above the frame.
++static f32 sListHideAbove = 0.0f;
++static s32 sScissorTop = 103, sScissorH = 353, sExtraRows = 0;
++#define LIST_HIDE_ABOVE sListHideAbove
++#define LIST_SCISSOR() SetScaledScissor(0, (u32)sScissorTop, GetScreenWidth(), (u32)sScissorH)
++#else
++#define LIST_HIDE_ABOVE 0.0f
++#define LIST_SCISSOR() SetScaledScissor(0, 103, GetScreenWidth(), 353)
++#endif
++
+ extern nw4r::ut::Font* gSysFont;
+ extern TPLPalette* gCommonTpl;
+ extern Color gHighlightColor;
+@@ -176,6 +188,11 @@ WeatherAddress::WeatherAddress(void* arc)
+     mBaseLayout = new ButtonGroup(arc, "base.brlyt", gButtonColors, false);
+     mListLayout = new ButtonGroup(arc, "set_area1.brlyt", gButtonColors, false);
+     mConfirmLayout = new ButtonGroup(arc, "set_area2.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mBaseLayout->ApplyPortrait("base");
++    mListLayout->ApplyPortrait("set_area1");
++    mConfirmLayout->ApplyPortrait("set_area2");
++#endif
+ 
+     mUpButton = mListLayout->FindButton("up");
+     if (mUpButton == NULL) {
+@@ -226,10 +243,63 @@ WeatherAddress::WeatherAddress(void* arc)
+     mUpArrowPos.y = 108.0f;
+     mUpArrowPos.x = mDownArrowPos.x = arrowX;
+     mDownArrowPos.y = 388.0f - GetTexHeight(gCommonTpl, 0);
++#ifdef FORECAST_PORT
++    PortraitGeometry();
++#endif
+ 
+     CHANGE_STATE(&WeatherAddress::StateClose, 0);
+ }
+ 
++#ifdef FORECAST_PORT
++void WeatherAddress::PortraitGeometry() {
++    PortraitScreen s;
++    GetPortraitScreen(&s);
++    f32 top = 100.0f, bottom = 393.0f;
++    if (s.active) {
++        PortraitListArea(&top, &bottom);
++    }
++    mListTop = top;
++    mClipTop = top;
++    mClipBottom = bottom;
++    mUpArrowPos.y = top + 8.0f;
++    mDownArrowPos.y = bottom - 5.0f - GetTexHeight(gCommonTpl, 0);
++    sListHideAbove = s.active ? s.top : 0.0f;
++    sScissorTop = (s32)top + 3;
++    sScissorH = (s32)s.bottom - sScissorTop;
++    sExtraRows = (s32)((bottom - top) / mRowHeight) - (s32)((393.0f - 100.0f) / mRowHeight);
++}
++
++void WeatherAddress::PortraitRelayout(void* arc) {
++    s32 active = mActiveLayout == mConfirmLayout ? 2 : (mActiveLayout == mListLayout ? 1 : 0);
++    s32 title = mTitle->mState;
++    delete mConfirmLayout;
++    delete mListLayout;
++    delete mBaseLayout;
++    mBaseLayout = new ButtonGroup(arc, "base.brlyt", gButtonColors, false);
++    mListLayout = new ButtonGroup(arc, "set_area1.brlyt", gButtonColors, false);
++    mConfirmLayout = new ButtonGroup(arc, "set_area2.brlyt", gButtonColors, false);
++    mBaseLayout->ApplyPortrait("base");
++    mListLayout->ApplyPortrait("set_area1");
++    mConfirmLayout->ApplyPortrait("set_area2");
++    mUpButton = mListLayout->FindButton("up");
++    mDownButton = mListLayout->FindButton("down");
++    mBackButton = mListLayout->FindButton("back");
++    mTitle = mListLayout->FindButton("text");
++    mTitle->SetState(title);
++    mActiveLayout = active == 2 ? mConfirmLayout : (active == 1 ? mListLayout : NULL);
++    PortraitGeometry();
++    if (mListHead != NULL) {
++        mNumPages = mNumEntries - 3 - sExtraRows;
++        if (mNumPages <= 0) {
++            mTopIndex = 0;
++        } else if (mTopIndex > mNumPages - 1) {
++            mTopIndex = mNumPages - 1;
++        }
++        mScrollTarget = -(mRowHeight * mTopIndex);
++    }
++}
++#endif
++
+ WeatherAddress::~WeatherAddress() {
+     if (mOtherEntry.mName != NULL) {
+         delete[] mOtherEntry.mName;
+@@ -392,6 +462,9 @@ s32 WeatherAddress::BuildCityList() {
+     mOtherEntry.mY = y;
+     mNumEntries++;
+     mNumPages = mNumEntries - 3;
++#ifdef FORECAST_PORT
++    mNumPages -= sExtraRows; // portrait: more rows on the screen
++#endif
+     return 0;
+ }
+ 
+@@ -447,6 +520,9 @@ s32 WeatherAddress::BuildAreaList() {
+     }
+ 
+     mNumPages = mNumEntries - 3;
++#ifdef FORECAST_PORT
++    mNumPages -= sExtraRows;
++#endif
+     if (mNumPages <= 0) {
+         return 0;
+     }
+@@ -471,7 +547,7 @@ void WeatherAddress::DrawCityList() {
+     nw4r::ut::Color color;
+     Vec quad[4];
+ 
+-    SetScaledScissor(0, 103, GetScreenWidth(), 353);
++    LIST_SCISSOR();
+     quad[0].z = quad[1].z = quad[2].z = quad[3].z = 0.0f;
+     for (; entry != NULL; entry = entry->mNext) {
+         if (!entry->mHidden) {
+@@ -513,7 +589,7 @@ void WeatherAddress::DrawAreaList() {
+     nw4r::ut::Color color;
+     Vec quad[4];
+ 
+-    SetScaledScissor(0, 103, GetScreenWidth(), 353);
++    LIST_SCISSOR();
+     quad[0].z = quad[1].z = quad[2].z = quad[3].z = 0.0f;
+     for (; entry != NULL; entry = entry->mNext) {
+         if (!entry->mHidden) {
+@@ -730,7 +806,7 @@ void WeatherAddress::ChangeState(StateFunc state, s32 arg) {
+             entry->mTop = entry->mY + offset;                                                             \
+             entry->mRight = right;                                                                           \
+             entry->mBottom = 40.0f + entry->mTop;                                                            \
+-            entry->mHidden = (entry->mBottom < 0.0f || entry->mTop > mClipBottom);                           \
++            entry->mHidden = (entry->mBottom < LIST_HIDE_ABOVE || entry->mTop > mClipBottom);                           \
+         }                                                                                                    \
+     }
+ 
+@@ -740,7 +816,7 @@ BOOL WeatherAddress::UpdateCityList() {
      for (AddressEntry* entry = mListHead; entry != NULL; entry = entry->mNext) {
          if (HitTest(entry) >= 0) {
              if (entry->mPlace != NULL) {
@@ -2247,7 +2451,7 @@ index 1ce7d42..12f74e4 100644
                  PlaySE(36);
              } else {
                  CHANGE_STATE(&WeatherAddress::StateArea, 0);
-@@ -887,7 +887,7 @@ void WeatherAddress::StateConfirm(s32 arg) {
+@@ -887,7 +963,7 @@ void WeatherAddress::StateConfirm(s32 arg) {
          mPhase++;
          mActiveLayout = mConfirmLayout;
          mDrawFunc = &WeatherAddress::DrawConfirm;
@@ -2609,7 +2813,7 @@ index 4d956e5..0078ec9 100644
      mIconPane = mLayout->FindButton("life_b");
      if (mIconPane == NULL) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..28222b4 100644
+index 661a8c4..9ba189e 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
 @@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
@@ -2623,7 +2827,7 @@ index 661a8c4..28222b4 100644
  
      mLayoutArc = LoadCompressedContentFile(gUnk80330B64, "weather_layout.arc.LZ", 32, NULL, gMEM2Heap);
      if (mLayoutArc == NULL) {
-@@ -281,6 +281,21 @@ void WeatherScene::Exit(BOOL shutdownNet, s32 event) {
+@@ -281,6 +281,22 @@ void WeatherScene::Exit(BOOL shutdownNet, s32 event) {
  void WeatherScene::Init() {}
  
  void WeatherScene::Draw() {
@@ -2633,7 +2837,8 @@ index 661a8c4..28222b4 100644
 +    // the other views are letterboxed.
 +    gPortraitCanvas = FALSE;
 +    if (mDrawFunc == &WeatherScene::DrawNormal || mDrawFunc == &WeatherScene::DrawSetting ||
-+        mDrawFunc == &WeatherScene::DrawConnect) {
++        mDrawFunc == &WeatherScene::DrawConnect || mDrawFunc == &WeatherScene::DrawAddress ||
++        mDrawFunc == &WeatherScene::DrawError) {
 +        PortraitScreen screen;
 +        GetPortraitScreen(&screen);
 +        if (screen.active) {
@@ -2645,7 +2850,7 @@ index 661a8c4..28222b4 100644
      if (!gFatalRequested) {
          if (mDrawFunc) {
              (this->*mDrawFunc)();
-@@ -310,7 +325,62 @@ void WeatherScene::unk2C() {
+@@ -310,7 +326,94 @@ void WeatherScene::unk2C() {
      gRainSound.Update();
  }
  
@@ -2656,10 +2861,42 @@ index 661a8c4..28222b4 100644
 +// idle: the views are rebuilt for the new shape and put back where they were
 +// (the same page, or the globe as it was: gSimpleGlobe keeps the view).
 +void WeatherScene::PortraitRotate() {
-+    if (!port_layout_pending() || mNormal == NULL || mAround == NULL || mSetting == NULL) {
++    if (!port_layout_pending() || gFade->mFading || gFade2->mFading) {
 +        return;
 +    }
-+    if (gFade->mFading || gFade2->mFading) {
++    BOOL views = mNormal != NULL && mAround != NULL && mSetting != NULL;
++    // Setup (date, region, city), or "One moment, please..." before the
++    // views exist: setup's and Connect's layouts are made again in place;
++    // the views, if any, are not showing and are simply made again.
++    if (mDrawFunc == &WeatherScene::DrawAddress || mDrawFunc == &WeatherScene::DrawError ||
++        (mDrawFunc == &WeatherScene::DrawConnect && !views)) {
++        port_layout_commit();
++        if (mAddress != NULL) {
++            mAddress->PortraitRelayout(mLayoutArc);
++        }
++        if (mConnect != NULL) {
++            mConnect->RebuildLayouts(mLayoutArc);
++        }
++        if (mErrorWindow != NULL) {
++            mErrorWindow->RebuildLayouts(mLayoutArc);
++        }
++        if (views) {
++            s32 page = gForecastPage;
++            delete mNormal;
++            delete mAround;
++            delete mSetting;
++            mNormal = new WeatherNormal(mLayoutArc);
++            mAround = new WeatherAround(mLayoutArc);
++            mSetting = new WeatherSetting(mLayoutArc);
++            gForecastPage = page;
++            mNormal->Reset();
++            mAround->Reset();
++            mSetting->Reset();
++        }
++        ClearHoveredButtons();
++        return;
++    }
++    if (!views) {
 +        return;
 +    }
 +    BOOL pages = mState == &WeatherScene::StateNormal && mStatePhase == 1 && gSettingResult != 3 &&
@@ -2708,7 +2945,7 @@ index 661a8c4..28222b4 100644
      if (gHoldAll) {
          sHoldTimer = 300;
      } else if (sHoldTimer != 0) {
-@@ -523,14 +593,22 @@ void WeatherScene::DrawNormal() {
+@@ -523,14 +626,22 @@ void WeatherScene::DrawNormal() {
      }
  
      nw4r::math::VEC3 pos(sTitlePos.x, sTitlePos.y + gTitleOffsetY, sTitlePos.z);

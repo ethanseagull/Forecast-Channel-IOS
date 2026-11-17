@@ -356,7 +356,7 @@ Off on the port (each marked in the source):
   is wide), centred, wider than the screen; an iPhone 15 Pro's canvas is about 182..650 x
   -266..722 in game units (360x988 EFB pixels, 2x). Each frame is laid out for the canvas when
   the game calls `port_portrait_canvas()` (WeatherScene: the forecast pages and the globe), else
-  letterboxed (setup, error windows, the Home menu). On the canvas every draw's clip space is mapped onto it
+  letterboxed (the Home menu). On the canvas every draw's clip space is mapped onto it
   (`portrait_draw`, `gx_sdl.cpp`), so the 3D globe simply sees more and 2D parts can sit outside
   the frame; ortho draws exactly over the frame (fades, unmoved backgrounds) stretch over it;
   full-frame scissors and EFB copies cover it. Layout parts get portrait places when a layout
@@ -375,9 +375,11 @@ Off on the port (each marked in the source):
   index is kept, and they reopen where they were (the globe keeps its view). iOS: all three
   orientations allowed. Windows test: `FORECAST_RESIZE=frame:WxH[;...]`. Also on the canvas: the UV Index page, Settings, "One moment,
   please..." and the connection error (backgrounds over the screen, message box shrunk). The
-  globe's top row sits beside the Dynamic Island (the status bar is hidden). Not converted yet:
-  setup (date, region, city), the error windows; the city detail card at the
-  bottom of the globe.
+  globe's top row sits beside the Dynamic Island (the status bar is hidden). Setup (date check, region and city
+  lists, confirm) and the error windows are on the canvas too: the list runs from under its
+  title to the button row (13 rows on an iPhone, 5 on the Wii), and setup relays itself out in
+  place when the phone turns. iOS launches dark (no grey launch screen). Not converted yet:
+  the city detail card at the bottom of the globe.
 
 ### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.

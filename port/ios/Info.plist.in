@@ -27,6 +27,10 @@
 	<!-- Full-resolution screen (no legacy letterboxing). -->
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- Dark: the launch screen (and anything iOS draws before the first
+	     frame) is black, not a grey flash. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UIStatusBarHidden</key>

@@ -38,6 +38,10 @@ BOOL PortraitLayout(const char* key, nw4r::lyt::Pane* root);
 // The credit line's top-left (game units): in the pages' "As of" strip.
 void PortraitCreditPos(f32* x, f32* y);
 
+// Setup's region / city list: where it starts and is cut off (game units),
+// in portrait; the Wii's are 100 and 393.
+void PortraitListArea(f32* top, f32* bottom);
+
 // How far apart the forecast pages are (they scroll vertically): 456 on the
 // Wii, the screen's height in portrait.
 f32 PortraitPageStep(void);

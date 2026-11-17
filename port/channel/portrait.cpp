@@ -230,9 +230,7 @@ const f32 kGap = 12.0f;
 
 void Around(Ctx& c) {
     const Area& a = c.c;
-    // The top row beside the Dynamic Island (the status bar is hidden): its
-    // middle 34 below the screen's top, about the island's.
-    f32 rowY = c.s.top + 34.0f;
+    f32 rowY = a.top + kTileH * 0.5f;
     Tile(c, "back", a.left + 56.0f, rowY, 112.0f, kTileH, true);
     Tile(c, "next", a.right - kSquare * 0.5f, rowY, kSquare, kTileH, false);
     f32 x = a.right - kSquare * 0.5f;
@@ -248,7 +246,7 @@ void Around(Ctx& c) {
 void AroundBelt(Ctx& c) {
     const Area& a = c.c;
     // The belt's right end at the screen's edge, under the top row.
-    Place(c, "belt", c.s.right, c.s.top + 34.0f + kTileH * 0.5f + 26.0f);
+    Place(c, "belt", c.s.right, a.top + kTileH + 26.0f);
     // The temperature legend: bottom left, above the credit line.
     f32 dx = (a.left + 48.0f) - 744.0f, dy = (a.bottom - 150.0f) - 355.0f;
     const char* legend[] = {"kion", "rain", "high", "text_kionH", "text_kionL", "text_ondo"};
@@ -644,6 +642,45 @@ void SixHours(Ctx& c) {
     }
 }
 
+// Setup's region / city list: the title under the Dynamic Island, the list
+// down to the button row (WeatherAddress, PortraitListArea), Back and the
+// arrows at the bottom.
+void AreaList(Ctx& c) {
+    PageGeo g = Geo(c.s);
+    f32 l = c.s.left, r = c.s.right, w = r - l;
+    Place(c, "text", 0.5f * (l + r), g.topBand + 36.0f);
+    Scale(c, "text", 0.82f);
+    const char* row[] = {"back", "down", "up", "blank"};
+    for (int i = 0; i < 4; i++) {
+        BarButton(c, row[i], l + 0.25f * w * (f32)i, l + 0.25f * w * (f32)(i + 1), false, 0.0f, 0.0f);
+    }
+}
+
+// Setup's "Is this location correct?": in the middle as on the Wii, the
+// title box made to fit the width.
+void AreaConfirm(Ctx& c) {
+    Scale(c, "text", 0.82f);
+}
+
+// The error windows (error2: fatal, error3: a yes / no question such as
+// the date check, error4: saving): the background over the screen, the
+// message box and the bar under it to the width, the buttons as they are.
+void ErrorDialog(Ctx& c) {
+    Base(c);
+    Scale(c, "text", 0.82f);
+    Pane* belt = c.root->FindPaneByName("belt", true);
+    if (belt != NULL) {
+        belt->SetSize(Size((c.s.right - c.s.left) / kWide + 2.0f, belt->GetSize().height));
+    }
+    Pane* message = c.root->FindPaneByName("message", true);
+    if (message != NULL) {
+        message->SetScale(VEC2(0.82f, 0.82f));
+    }
+    if (c.root->FindPaneByName("next", true) != NULL) {
+        ResizeButton(c, "next", 300.0f, 84.0f);
+    }
+}
+
 // "One moment, please..." and the connection errors: the background over
 // the whole screen, the message box (wider than the screen) made smaller.
 void Dialog(Ctx& c) {
@@ -674,7 +711,12 @@ const Entry kLayouts[] = {
     {"life_nWW", Life},
     {"day_6h_nWW", SixHours},
     {"set", Set},
+    {"set_area1", AreaList},
+    {"set_area2", AreaConfirm},
     {"error0", Dialog},
+    {"error2", ErrorDialog},
+    {"error3", ErrorDialog},
+    {"error4", ErrorDialog},
     {"error1", Dialog},
 };
 
@@ -701,6 +743,14 @@ BOOL PortraitLayout(const char* key, Pane* root) {
         }
     }
     return FALSE;
+}
+
+void PortraitListArea(f32* top, f32* bottom) {
+    PortraitScreen s;
+    GetPortraitScreen(&s);
+    PageGeo g = Geo(s);
+    *top = g.topBand + 62.0f;    // just under the title box (AreaList)
+    *bottom = g.bottomBand - 1.0f; // the button row's top
 }
 
 void PortraitCreditPos(f32* x, f32* y) {
