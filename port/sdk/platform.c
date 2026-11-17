@@ -28,15 +28,10 @@ bool port_platform_init(void) {
         return false;
     }
 #ifdef SDL_PLATFORM_IOS
-    // Portrait or landscape is decided when the app starts, by how the phone
-    // is held: the layouts are placed once, as they load (port/channel/
-    // portrait.cpp). The app then keeps that orientation.
-    {
-        SDL_DisplayOrientation o = SDL_GetCurrentDisplayOrientation(SDL_GetPrimaryDisplay());
-        bool upright = o == SDL_ORIENTATION_PORTRAIT || o == SDL_ORIENTATION_PORTRAIT_FLIPPED;
-        SDL_SetHint(SDL_HINT_ORIENTATIONS, upright ? "Portrait" : "LandscapeLeft LandscapeRight");
-        port_log("display orientation %d: %s\n", (int)o, upright ? "portrait" : "landscape");
-    }
+    // Landscape and portrait (milestone 7): the app follows the phone; the
+    // game rebuilds its screens when it turns (port_layout_pending).
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
+    port_log("display orientation %d at start\n", (int)SDL_GetCurrentDisplayOrientation(SDL_GetPrimaryDisplay()));
 #endif
     // 16:9 at twice the Wii's 608-wide safe frame; resizable.
     // FORECAST_HIDDEN=1 (automated test runs): no visible window; frames are
@@ -147,6 +142,28 @@ uint32_t port_platform_frame(void) {
         }
     }
 
+    // Testing: FORECAST_RESIZE=frame:WxH[;...] resizes the window at that frame
+    // (turning the phone: e.g. 1704x786 to 786x1704).
+    static const char* sResize;
+    static bool sResizeRead;
+    if (!sResizeRead) {
+        sResize = SDL_getenv("FORECAST_RESIZE");
+        sResizeRead = true;
+    }
+    for (const char* t = sResize; t != NULL && *t != '\0';) {
+        unsigned at = 0;
+        int rw = 0, rh = 0;
+        if (SDL_sscanf(t, "%u:%dx%d", &at, &rw, &rh) == 3 && sFrame + 1 == at && rw > 0 && rh > 0) {
+            SDL_SetWindowSize(sWindow, rw, rh);
+            SDL_SyncWindow(sWindow);
+            port_log("window resized to %dx%d (FORECAST_RESIZE)\n", rw, rh);
+        }
+        t = SDL_strchr(t, ';');
+        if (t != NULL) {
+            t++;
+        }
+    }
+
     // Frame pacing. Windows: a fixed 60 Hz grid (monitors may run at any
     // rate). iOS: the display's own refresh paces the game (presenting waits
     // for a free drawable), and the timer only enforces a minimum interval:
@@ -235,6 +252,58 @@ static bool portrait_window(float width, float height) {
     return sPortraitOn && height > width;
 }
 
+// The window shape the game's screens are laid out for (port_platform.h,
+// "Turning the phone").
+static int sLayoutW, sLayoutH;
+static bool sLayoutLocked;
+
+static void live_size(int* w, int* h) {
+    *w = *h = 0;
+    if (sWindow != NULL) {
+        SDL_GetWindowSize(sWindow, w, h);
+    }
+}
+
+static void layout_update(void) {
+    int w, h;
+    live_size(&w, &h);
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    bool bothLandscape = !portrait_window((float)w, (float)h) && !portrait_window((float)sLayoutW, (float)sLayoutH);
+    if (sLayoutW <= 0 || !sLayoutLocked || bothLandscape) {
+        sLayoutW = w;
+        sLayoutH = h;
+    }
+}
+
+void port_layout_lock(void) {
+    layout_update();
+    sLayoutLocked = true;
+}
+
+bool port_layout_pending(void) {
+    layout_update();
+    int w, h;
+    live_size(&w, &h);
+    return w > 0 && h > 0 && (w != sLayoutW || h != sLayoutH);
+}
+
+void port_layout_commit(void) {
+    int w, h;
+    live_size(&w, &h);
+    if (w > 0 && h > 0) {
+        sLayoutW = w;
+        sLayoutH = h;
+    }
+}
+
+void port_layout_size(int* w, int* h) {
+    layout_update();
+    *w = sLayoutW;
+    *h = sLayoutH;
+}
+
 void port_portrait_canvas(void) { sCanvasRequest = true; }
 
 bool port_portrait_take_canvas(void) {
@@ -270,7 +339,8 @@ static void safe_insets(float* top, float* bottom) {
 void port_portrait(PortPortrait* p) {
     SDL_zerop(p);
     int ww = 0, wh = 0;
-    if (sWindow == NULL || !SDL_GetWindowSize(sWindow, &ww, &wh) || !portrait_window((float)ww, (float)wh)) {
+    port_layout_size(&ww, &wh);
+    if (ww <= 0 || wh <= 0 || !portrait_window((float)ww, (float)wh)) {
         return;
     }
     // The frame in the canvas: as high as the window is wide, 16:9.
@@ -287,11 +357,40 @@ void port_portrait(PortPortrait* p) {
     p->safeBottom = bottom * 456.0f / fh;
 }
 
+static void layout_in(float width, float height, bool pending, PortDisplay* d);
+
 void port_display_layout(float width, float height, PortDisplay* d) {
     SDL_zerop(d);
     if (width <= 0.0f || height <= 0.0f) {
         return;
     }
+    // The laid-out screen: the whole drawable, or while the window has turned
+    // (the screens not rebuilt yet) the old shape fitted into it.
+    int lw = 0, lh = 0, ww = 0, wh = 0;
+    port_layout_size(&lw, &lh);
+    live_size(&ww, &wh);
+    bool pending = lw > 0 && lh > 0 && (lw != ww || lh != wh);
+    float vx = 0.0f, vy = 0.0f;
+    if (pending) {
+        float s = SDL_min(width / (float)lw, height / (float)lh);
+        float vw = (float)lw * s, vh = (float)lh * s;
+        vx = (width - vw) * 0.5f;
+        vy = (height - vh) * 0.5f;
+        width = vw;
+        height = vh;
+    }
+    layout_in(width, height, pending, d);
+    d->x += vx;
+    d->y += vy;
+    d->vx = vx;
+    d->vy = vy;
+    d->vw = width;
+    d->vh = height;
+}
+
+// port_display_layout for the laid-out screen (width x height); pending:
+// the window has turned since (its safe area belongs to the new shape).
+static void layout_in(float width, float height, bool pending, PortDisplay* d) {
     if (portrait_window(width, height)) {
         d->portrait = true;
         d->canvas = sCanvasShown;
@@ -314,8 +413,8 @@ void port_display_layout(float width, float height, PortDisplay* d) {
     float sx0 = 0.0f, sx1 = width;
     int ww = 0, wh = 0;
     SDL_Rect safe;
-    if (sWindow != NULL && SDL_GetWindowSize(sWindow, &ww, &wh) && ww > 0 && SDL_GetWindowSafeArea(sWindow, &safe) &&
-        safe.w > 0 && (safe.x > 0 || safe.w < ww)) {
+    if (!pending && sWindow != NULL && SDL_GetWindowSize(sWindow, &ww, &wh) && ww > 0 &&
+        SDL_GetWindowSafeArea(sWindow, &safe) && safe.w > 0 && (safe.x > 0 || safe.w < ww)) {
         float s = width / (float)ww;
         sx0 = SDL_max(0.0f, (float)safe.x * s);
         sx1 = SDL_min(width, (float)(safe.x + safe.w) * s);

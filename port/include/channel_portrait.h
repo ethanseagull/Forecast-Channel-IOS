@@ -51,4 +51,9 @@ void PortraitBand(f32* top, f32* bottom);
 void PortraitLabelArea(f32* top, f32* bottom, f32* left, f32* right);
 void PortraitOnScreen(f32* left, f32* top, f32* right, f32* bottom);
 
+// The 6-Hour Weather zoom: the dimming grows from the icon (zx, zy) to the
+// whole screen, not the frame. Sets the offsets to the screen's edges and
+// returns TRUE in portrait; FALSE (unchanged) otherwise.
+BOOL PortraitZoomTarget(f32 zx, f32 zy, f32* left, f32* top, f32* right, f32* bottom);
+
 #endif

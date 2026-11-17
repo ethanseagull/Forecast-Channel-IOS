@@ -886,6 +886,16 @@ static void ensure_efb(void) {
     // at ~30 fps. FORECAST_EFB_SCALE=n overrides it.
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(port_window(), &pw, &ph);
+    {
+        // The laid-out screen's pixels (all of the window, unless it has
+        // turned and the game has not rebuilt its screens yet).
+        PortDisplay dp;
+        port_display_layout((f32)pw, (f32)ph, &dp);
+        if (dp.vw > 0.0f && dp.vh > 0.0f) {
+            pw = (int)dp.vw;
+            ph = (int)dp.vh;
+        }
+    }
 #ifdef SDL_PLATFORM_IOS
     u32 scale = ph > 0 ? (u32)ph / h : 2;
 #else
@@ -911,9 +921,12 @@ static void ensure_efb(void) {
     port_display_layout((f32)ww, (f32)wh, &d);
     if (d.portrait) {
         // The canvas: the frame (w EFB pixels across 16:9 of the window's
-        // width) and the screen around it, in EFB pixels.
-        f32 fw = (f32)ww * (16.0f / 9.0f), fh = (f32)ww;
-        u32 cw = (u32)SDL_lroundf((f32)w * (f32)ww / fw), ch = (u32)SDL_ceilf((f32)h * (f32)wh / fh);
+        // width) and the screen around it, in EFB pixels, for the shape the
+        // game's screens are laid out for.
+        int lw = 0, lh = 0;
+        port_layout_size(&lw, &lh);
+        f32 fw = (f32)lw * (16.0f / 9.0f), fh = (f32)lw;
+        u32 cw = (u32)SDL_lroundf((f32)w * (f32)lw / fw), ch = (u32)SDL_ceilf((f32)h * (f32)lh / fh);
         // As many pixels as the landscape EFB at most: a 3x canvas on an
         // iPhone (1080x2967) would be past what kept the GPU at 60 fps.
 #ifdef SDL_PLATFORM_IOS
@@ -1246,8 +1259,10 @@ static void compose(SDL_GPUCommandBuffer* cb, SDL_GPUTexture* target, Uint32 tw,
         bi.source.w = sCanvasW * sScale;
         bi.source.h = sCanvasH * sScale;
         bi.destination.texture = target;
-        bi.destination.w = tw;
-        bi.destination.h = th;
+        bi.destination.x = (Uint32)d.vx;
+        bi.destination.y = (Uint32)d.vy;
+        bi.destination.w = (Uint32)d.vw;
+        bi.destination.h = (Uint32)d.vh;
         bi.load_op = SDL_GPU_LOADOP_LOAD;
         bi.filter = SDL_GPU_FILTER_LINEAR;
         SDL_BlitGPUTexture(cb, &bi);

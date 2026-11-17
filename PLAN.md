@@ -367,11 +367,16 @@ Off on the port (each marked in the source):
   (`channel_portrait.h`). Pages: top row (up, Settings), belt, content stacked, "As of" strip,
   bottom row; one-finger vertical swipe turns the page. Globe: End / Next and the title belt at
   the top, zoom and tilts in a column on the right, Restore bottom right, controls always up.
-  iOS: portrait added to `Info.plist`; the orientation the app starts in is kept
-  (`SDL_HINT_ORIENTATIONS`). Also on the canvas: the UV Index page, Settings, "One moment,
+  6-Hour Weather (tap a page's icon): the four icons in two rows of two; its dimming grows to
+  the whole screen. Turning the phone: the screens are laid out for the window shape they were
+  built for (`port_layout_size`); when the window turns, that shape is shown fitted into it
+  until the weather views can be rebuilt (`WeatherScene::PortraitRotate`, once the pages or the
+  globe sit idle): WeatherNormal / WeatherAround / WeatherSetting are made again, the page
+  index is kept, and they reopen where they were (the globe keeps its view). iOS: all three
+  orientations allowed. Windows test: `FORECAST_RESIZE=frame:WxH[;...]`. Also on the canvas: the UV Index page, Settings, "One moment,
   please..." and the connection error (backgrounds over the screen, message box shrunk). The
   globe's top row sits beside the Dynamic Island (the status bar is hidden). Not converted yet:
-  the 6-hour detail, setup (date, region, city), the error windows; the city detail card at the
+  setup (date, region, city), the error windows; the city detail card at the
   bottom of the globe.
 
 ### Next (from `notes/64bit-audit.md`)

@@ -27,8 +27,11 @@ void port_pointer(float* x, float* y, bool* down, bool* inside);
 typedef struct PortDisplay {
     float x, y, w, h;            // the frame
     float fillLeft, fillRight;   // widths of the filled strips left and right of it
-    bool portrait;               // the window is taller than wide (see PortPortrait)
+    bool portrait;               // laid out for a window taller than wide (see PortPortrait)
     bool canvas;                 // portrait: the frame at full size in the canvas (else letterboxed)
+    float vx, vy, vw, vh;        // the laid-out screen in the drawable: all of it, except
+                                 // while the window has turned and the game has not
+                                 // rebuilt its screens yet (see port_layout_pending)
 } PortDisplay;
 
 // The layout for a drawable of width x height, in that drawable's units: the
@@ -71,6 +74,18 @@ void port_portrait_presented(bool canvas);
 // frame): a one-finger swipe up / down turns the page (kpad.c).
 void port_portrait_pages(void);
 bool port_portrait_pages_showing(void);
+
+// Turning the phone (milestone 7). The game lays its screens out for the
+// window's shape when it builds them (port_layout_lock: from the first
+// layout on). When the window turns between portrait and landscape (or a
+// portrait window is resized), everything keeps using the old shape, shown
+// fitted into the window, until the game has rebuilt its screens and calls
+// port_layout_commit. Landscape-to-landscape changes follow at once.
+void port_layout_lock(void);
+bool port_layout_pending(void);
+void port_layout_commit(void);
+// The shape the screens are laid out for, in window units.
+void port_layout_size(int* w, int* h);
 
 // Frame-time accounting for the periodic "perf:" log line (platform.c).
 enum {

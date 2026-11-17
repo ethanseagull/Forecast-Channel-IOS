@@ -80,6 +80,19 @@ void PortraitLabelArea(f32* top, f32* bottom, f32* left, f32* right) {
     }
 }
 
+BOOL PortraitZoomTarget(f32 zx, f32 zy, f32* left, f32* top, f32* right, f32* bottom) {
+    PortraitScreen s;
+    GetPortraitScreen(&s);
+    if (!s.active) {
+        return FALSE;
+    }
+    *left = s.left - zx;
+    *top = s.top - zy;
+    *right = s.right - zx;
+    *bottom = s.bottom - zy;
+    return TRUE;
+}
+
 void PortraitOnScreen(f32* left, f32* top, f32* right, f32* bottom) {
     if (!gPortraitCanvas) {
         return;
@@ -564,6 +577,73 @@ void Set(Ctx& c) {
     BarButton(c, "blank", l + 0.3f * w, r, false, 0.0f, 0.0f);
 }
 
+// 6-Hour Weather (tapping a page's weather icon): the four 6-hour icons in
+// two rows of two inside a panel the screen's width, over the dimmed page.
+void SixHours(Ctx& c) {
+    Pane* filter = Find(c, c.root, "bg_filter");
+    if (filter != NULL) {
+        filter->SetTranslate(ToLayout(0.5f * (c.s.left + c.s.right), 0.5f * (c.s.top + c.s.bottom)));
+        filter->SetSize(Size((c.s.right - c.s.left) / kWide + 2.0f, c.s.bottom - c.s.top + 2.0f));
+    }
+    PageGeo g = Geo(c.s);
+    f32 cx = 0.5f * (c.s.left + c.s.right), w = c.s.right - c.s.left - 24.0f, half = 0.5f * w;
+    const f32 cellW = 136.0f * kWide, cellH = 104.0f, textH = 50.0f, gapX = 12.0f, gapY = 16.0f;
+    const f32 titleH = 40.0f, pad = 12.0f;
+    f32 h = titleH + pad + 2.0f * (cellH + textH) + gapY + pad;
+    f32 py = 0.5f * (g.contentTop + g.contentBottom);
+    Pane* grp = Find(c, c.root, "6hours");
+    if (grp == NULL) {
+        return;
+    }
+    grp->SetTranslate(ToLayout(cx, py));
+    // In the group: layout units across, y up from the panel's middle.
+    struct Part {
+        const char* name;
+        f32 x, y, w, h; // game units; w / h 0 keep the size
+    };
+    f32 colX = 0.5f * (cellW + gapX);
+    f32 row1 = 0.5f * h - titleH - pad - 0.5f * cellH, row2 = row1 - (cellH + textH + gapY);
+    const Part parts[] = {
+        {"6hoursB0", -0.5f * half, 0.5f * h, half, 0.0f},  {"6hoursB1", 0.5f * half, 0.5f * h, half, 0.0f},
+        {"6hoursB2", -0.5f * half, 0.0f, half, h},          {"6hoursB3", 0.5f * half, 0.0f, half, h},
+        {"6hoursB4", -0.5f * half, -0.5f * h, half, 0.0f}, {"6hoursB5", 0.5f * half, -0.5f * h, half, 0.0f},
+        {"6hoursB6", 0.0f, 0.5f * h - 0.5f * titleH - 2.0f, w, 0.0f},
+        {"6hoursB7", -colX, row1, 0.0f, 0.0f},             {"6hoursB8", colX, row1, 0.0f, 0.0f},
+        {"6hoursB9", -colX, row2, 0.0f, 0.0f},             {"6hoursB10", colX, row2, 0.0f, 0.0f},
+    };
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        Pane* p = Find(c, grp, parts[i].name);
+        if (p == NULL) {
+            continue;
+        }
+        p->SetTranslate(VEC3(parts[i].x / kWide, parts[i].y, 0.0f));
+        Size size = p->GetSize();
+        if (parts[i].w > 0.0f) {
+            size.width = parts[i].w / kWide;
+        }
+        if (parts[i].h > 0.0f) {
+            size.height = parts[i].h;
+        }
+        p->SetSize(size);
+    }
+    Pane* title = Find(c, grp, "6hoursT");
+    if (title != NULL) {
+        title->SetTranslate(VEC3((-half + 12.0f) / kWide, 0.5f * h - 0.5f * titleH - 2.0f, 0.0f));
+    }
+    // The icons and their times (game units, y down), a, b over c, d.
+    const char cells[] = "abcd";
+    char name[32];
+    for (int i = 0; i < 4; i++) {
+        f32 x = cx + (i % 2 == 0 ? -colX : colX), y = py - (i < 2 ? row1 : row2);
+        snprintf(name, sizeof(name), "icon_%c", cells[i]);
+        Place(c, name, x, y);
+        snprintf(name, sizeof(name), "text_icon_%c", cells[i]);
+        Place(c, name, x, y + 80.0f);
+        snprintf(name, sizeof(name), "text_icon_%cUSA", cells[i]);
+        Place(c, name, x, y + 80.0f);
+    }
+}
+
 // "One moment, please..." and the connection errors: the background over
 // the whole screen, the message box (wider than the screen) made smaller.
 void Dialog(Ctx& c) {
@@ -592,6 +672,7 @@ const Entry kLayouts[] = {
     {"day_nWW", Day},
     {"week_nWW", Week},
     {"life_nWW", Life},
+    {"day_6h_nWW", SixHours},
     {"set", Set},
     {"error0", Dialog},
     {"error1", Dialog},
