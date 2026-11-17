@@ -217,7 +217,9 @@ const f32 kGap = 12.0f;
 
 void Around(Ctx& c) {
     const Area& a = c.c;
-    f32 rowY = a.top + kTileH * 0.5f;
+    // The top row beside the Dynamic Island (the status bar is hidden): its
+    // middle 34 below the screen's top, about the island's.
+    f32 rowY = c.s.top + 34.0f;
     Tile(c, "back", a.left + 56.0f, rowY, 112.0f, kTileH, true);
     Tile(c, "next", a.right - kSquare * 0.5f, rowY, kSquare, kTileH, false);
     f32 x = a.right - kSquare * 0.5f;
@@ -233,7 +235,7 @@ void Around(Ctx& c) {
 void AroundBelt(Ctx& c) {
     const Area& a = c.c;
     // The belt's right end at the screen's edge, under the top row.
-    Place(c, "belt", c.s.right, a.top + kTileH + 26.0f);
+    Place(c, "belt", c.s.right, c.s.top + 34.0f + kTileH * 0.5f + 26.0f);
     // The temperature legend: bottom left, above the credit line.
     f32 dx = (a.left + 48.0f) - 744.0f, dy = (a.bottom - 150.0f) - 355.0f;
     const char* legend[] = {"kion", "rain", "high", "text_kionH", "text_kionL", "text_ondo"};
@@ -434,6 +436,148 @@ void Week(Ctx& c) {
     }
 }
 
+// A button's art (<name>B) resized to w x h game units, its parts with it;
+// the hit area follows.
+void ResizeButton(Ctx& c, const char* name, f32 w, f32 h) {
+    Pane* btn = Find(c, c.root, name);
+    if (btn == NULL) {
+        return;
+    }
+    char sub[32];
+    snprintf(sub, sizeof(sub), "%sB", name);
+    Pane* base = Find(c, btn, sub);
+    if (base == NULL) {
+        return;
+    }
+    Size size = base->GetSize();
+    VEC2 scale = base->GetScale();
+    f32 lw = w / kWide;
+    base->SetScale(VEC2((scale.x < 0.0f ? -1.0f : 1.0f) * lw / size.width,
+                        (scale.y < 0.0f ? -1.0f : 1.0f) * h / size.height));
+    base->SetSize(Size(lw, h));
+}
+
+void Scale(Ctx& c, const char* name, f32 k) {
+    Pane* p = Find(c, c.root, name);
+    if (p != NULL) {
+        VEC2 s = p->GetScale();
+        p->SetScale(VEC2(s.x * k, s.y * k));
+    }
+}
+
+// UV Index: the sun over the "UV Index" bar, the number and its words in the
+// two boxes under it, all within the screen's width.
+void Life(Ctx& c) {
+    PageGeo g = Geo(c.s);
+    f32 cx = 0.5f * (c.s.left + c.s.right), w = c.s.right - c.s.left - 24.0f;
+    f32 half = 0.5f * w, numW = 120.0f, gap = 8.0f, textW = w - numW - gap;
+    f32 gy = g.contentTop + 0.40f * (g.contentBottom - g.contentTop);
+    Pane* grp = Find(c, c.root, "life_b");
+    if (grp == NULL) {
+        return;
+    }
+    grp->SetTranslate(ToLayout(cx, gy));
+    // Parts in the group's space: layout units across (game / kWide), y up.
+    struct Part {
+        const char* name;
+        f32 x, w; // game units from the group's centre; w 0 keeps the size
+    };
+    f32 numX = -half + 0.5f * numW, textX = -half + numW + gap + 0.5f * textW;
+    const Part parts[] = {
+        {"life_bB0", 0.0f, w},           // the "UV Index" bar
+        {"life_bB2", 0.0f, w},           // its top line
+        {"life_bB3", -half, 0.0f},       // its left line
+        {"life_bB1", numX, numW},        // the number's box
+        {"life_bB4", numX, numW},        // its top line
+        {"life_bB5", -half, 0.0f},       // its left line
+        {"life_bB6", textX, textW},      // the words' box
+        {"life_bB7", textX, textW},      // its top line
+        {"life_bB8", -half + numW + gap, 0.0f}, // its left line
+    };
+    for (size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+        Pane* p = Find(c, grp, parts[i].name);
+        if (p == NULL) {
+            continue;
+        }
+        VEC3 t = p->GetTranslate();
+        p->SetTranslate(VEC3(parts[i].x / kWide, t.y, t.z));
+        if (parts[i].w > 0.0f) {
+            p->SetSize(Size(parts[i].w / kWide, p->GetSize().height));
+        }
+    }
+    Pane* icon = Find(c, grp, "life_bI"); // the sun: above the bar
+    if (icon != NULL) {
+        icon->SetTranslate(VEC3(0.0f, 18.0f + 8.0f + 56.0f, 0.0f));
+    }
+    Pane* label = Find(c, grp, "life_bT");
+    if (label != NULL) {
+        label->SetTranslate(VEC3(0.0f, 0.0f, 0.0f));
+    }
+    // The number's digits and the words: where they were in their boxes.
+    f32 boxY = gy + 75.0f; // the boxes' middle (75 below the bar)
+    Place(c, "life_b_1-1", cx + numX, boxY - 5.0f);
+    Place(c, "life_b_1-10", cx + numX + 19.0f * kWide, boxY - 5.0f);
+    Place(c, "life_b_1-100", cx + numX + 38.0f * kWide, boxY - 5.0f);
+    Place(c, "life_b_telop", cx + textX, boxY);
+}
+
+// Settings: the title under the Dynamic Island; for each setting its label
+// bar, then its value with the Change button beside it; the Back row at
+// the bottom.
+void Set(Ctx& c) {
+    PageGeo g = Geo(c.s);
+    f32 l = c.s.left, r = c.s.right, w = r - l, cx = 0.5f * (l + r);
+    f32 y = g.topBand + 18.0f;
+    Place(c, "belt", cx, y);
+    Pane* belt = Find(c, c.root, "beltB");
+    if (belt != NULL) {
+        belt->SetSize(Size(w / kWide + 2.0f, belt->GetSize().height));
+    }
+    const f32 btnW = 170.0f, labelH = 32.0f, valueH = 58.0f, rowGap = 40.0f;
+    f32 valueCx = l + 12.0f + 0.5f * (w - 24.0f - btnW - 10.0f);
+    const char* rows[] = {"city", "kion", "wind"};
+    char name[32];
+    y += 15.0f + 36.0f;
+    for (int i = 0; i < 3; i++) {
+        f32 labelY = y + 0.5f * labelH, valueY = y + labelH + 6.0f + 0.5f * valueH;
+        Place(c, rows[i], cx, labelY);
+        snprintf(name, sizeof(name), "%sT", rows[i]);
+        Pane* t = Find(c, c.root, name);
+        if (t != NULL) {
+            t->SetTranslate(VEC3(0.0f, t->GetTranslate().y, 0.0f)); // label centred
+        }
+        snprintf(name, sizeof(name), "%s_set", rows[i]);
+        Place(c, name, cx, valueY);
+        snprintf(name, sizeof(name), "%s_setT", rows[i]);
+        t = Find(c, c.root, name);
+        if (t != NULL) {
+            t->SetTranslate(VEC3((valueCx - cx) / kWide, t->GetTranslate().y, 0.0f));
+        }
+        snprintf(name, sizeof(name), "%s_btn", rows[i]);
+        Place(c, name, r - 12.0f - 0.5f * btnW, valueY);
+        ResizeButton(c, name, btnW, 64.0f);
+        y += labelH + 6.0f + valueH + rowGap;
+    }
+    Place(c, "text", cx, y + 40.0f);
+    Scale(c, "text", 0.82f);
+    BarButton(c, "back", l, l + 0.3f * w, false, 0.0f, 0.0f);
+    BarButton(c, "blank", l + 0.3f * w, r, false, 0.0f, 0.0f);
+}
+
+// "One moment, please..." and the connection errors: the background over
+// the whole screen, the message box (wider than the screen) made smaller.
+void Dialog(Ctx& c) {
+    Base(c);
+    const f32 k = 0.82f;
+    Scale(c, "text", k);
+    // Only the error screen (error0) has these.
+    if (c.root->FindPaneByName("next", true) != NULL) {
+        Scale(c, "error_server", k);
+        Scale(c, "error_code", k);
+        ResizeButton(c, "next", 300.0f, 84.0f);
+    }
+}
+
 struct Entry {
     const char* key;
     void (*fn)(Ctx&);
@@ -447,6 +591,10 @@ const Entry kLayouts[] = {
     {"base_belt", BaseBelt},
     {"day_nWW", Day},
     {"week_nWW", Week},
+    {"life_nWW", Life},
+    {"set", Set},
+    {"error0", Dialog},
+    {"error1", Dialog},
 };
 
 } // namespace

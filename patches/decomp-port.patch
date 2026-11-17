@@ -1542,7 +1542,7 @@ index bc56d2e..fe6a531 100644
      f32 top = mPos.y - half;
      f32 bottom = mPos.y + half;
 diff --git a/src/Connect.cpp b/src/Connect.cpp
-index 8f14596..f9da591 100644
+index 8f14596..5ad7b45 100644
 --- a/src/Connect.cpp
 +++ b/src/Connect.cpp
 @@ -15,6 +15,15 @@
@@ -1561,7 +1561,7 @@ index 8f14596..f9da591 100644
  
  static const s32 sProgressIcons[2][6] = {
      {0, 1, 2, 3, 4, 5},
-@@ -24,7 +33,7 @@ static const s32 sProgressIcons[2][6] = {
+@@ -24,10 +33,14 @@ static const s32 sProgressIcons[2][6] = {
  Connect::Connect(void* arc, ForecastData* data) {
      mData = data;
      mForecastBuf = MEM2Alloc(0x32000, 0);
@@ -1570,7 +1570,14 @@ index 8f14596..f9da591 100644
      mFade = gFade;
      mConnectLayout = new ButtonGroup(arc, "error1.brlyt", gButtonColors, false);
      mErrorLayout = new ButtonGroup(arc, "error0.brlyt", gButtonColors, false);
-@@ -103,7 +112,7 @@ void Connect::Calc() {
++#ifdef FORECAST_PORT
++    mConnectLayout->ApplyPortrait("error1");
++    mErrorLayout->ApplyPortrait("error0");
++#endif
+     Start();
+ }
+ 
+@@ -103,7 +116,7 @@ void Connect::Calc() {
              mState = 1;
          } else {
              mTask = CWiiConnect24::getWeather(mForecastBuf, &mForecastTime, &mForecastSize, mShortBuf, &mShortTime,
@@ -1579,7 +1586,7 @@ index 8f14596..f9da591 100644
              if (mTask < 0) {
                  OSPanic("Connect.cpp", 163, "CWiiConnect24::getWeather() failed.\n");
              }
-@@ -154,7 +163,7 @@ void Connect::Calc() {
+@@ -154,7 +167,7 @@ void Connect::Calc() {
              mTaskResult = task->mResult;
              switch (mTaskResult) {
              case 0:
@@ -1588,7 +1595,7 @@ index 8f14596..f9da591 100644
                      if (mTask < 0) {
                          OSPanic("Connect.cpp", 237, "CWiiConnect24::downloadWeatherShort");
                      }
-@@ -210,7 +219,18 @@ void Connect::Calc() {
+@@ -210,7 +223,18 @@ void Connect::Calc() {
          break;
      }
      case 6:
@@ -1607,7 +1614,7 @@ index 8f14596..f9da591 100644
          break;
      }
  
-@@ -430,12 +450,12 @@ void Connect::DrawProgress() {
+@@ -430,12 +454,12 @@ void Connect::DrawProgress() {
          SetProgressColor(alpha);
  
          u32 icon = sProgressIcons[gRegion != 0][i];
@@ -2528,7 +2535,7 @@ index 4d956e5..0078ec9 100644
      mIconPane = mLayout->FindButton("life_b");
      if (mIconPane == NULL) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..a0fbe66 100644
+index 661a8c4..691b033 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
 @@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
@@ -2542,15 +2549,17 @@ index 661a8c4..a0fbe66 100644
  
      mLayoutArc = LoadCompressedContentFile(gUnk80330B64, "weather_layout.arc.LZ", 32, NULL, gMEM2Heap);
      if (mLayoutArc == NULL) {
-@@ -281,6 +281,19 @@ void WeatherScene::Exit(BOOL shutdownNet, s32 event) {
+@@ -281,6 +281,21 @@ void WeatherScene::Exit(BOOL shutdownNet, s32 event) {
  void WeatherScene::Init() {}
  
  void WeatherScene::Draw() {
 +#ifdef FORECAST_PORT
-+    // Portrait: the forecast pages and the globe are laid out on the canvas
-+    // around the frame (channel_portrait.h); the other views are letterboxed.
++    // Portrait: the forecast pages, the globe, Settings and the connection
++    // screens are laid out on the canvas around the frame (channel_portrait.h);
++    // the other views are letterboxed.
 +    gPortraitCanvas = FALSE;
-+    if (mDrawFunc == &WeatherScene::DrawNormal) {
++    if (mDrawFunc == &WeatherScene::DrawNormal || mDrawFunc == &WeatherScene::DrawSetting ||
++        mDrawFunc == &WeatherScene::DrawConnect) {
 +        PortraitScreen screen;
 +        GetPortraitScreen(&screen);
 +        if (screen.active) {
@@ -2562,7 +2571,7 @@ index 661a8c4..a0fbe66 100644
      if (!gFatalRequested) {
          if (mDrawFunc) {
              (this->*mDrawFunc)();
-@@ -523,14 +536,22 @@ void WeatherScene::DrawNormal() {
+@@ -523,14 +538,22 @@ void WeatherScene::DrawNormal() {
      }
  
      nw4r::math::VEC3 pos(sTitlePos.x, sTitlePos.y + gTitleOffsetY, sTitlePos.z);
@@ -2587,6 +2596,21 @@ index 661a8c4..a0fbe66 100644
          mIconPos.z = pos.z;
          TPLPalette* tpl = gCommonTpl;
          u32 icon = 3;
+diff --git a/src/WeatherSetting.cpp b/src/WeatherSetting.cpp
+index 1fef7a3..94f6b76 100644
+--- a/src/WeatherSetting.cpp
++++ b/src/WeatherSetting.cpp
+@@ -23,6 +23,10 @@ WeatherSetting::WeatherSetting(void* arc)
+       mCityBrightness(64), mWindBrightness(64), mStatePhase(0), unkBC(0) {
+     mSetLayout = new ButtonGroup(arc, "set.brlyt", gButtonColors, false);
+     mBaseLayout = new ButtonGroup(arc, "base.brlyt", gButtonColors, false);
++#ifdef FORECAST_PORT
++    mSetLayout->ApplyPortrait("set");
++    mBaseLayout->ApplyPortrait("base");
++#endif
+ 
+     mKionSet = mSetLayout->FindButton("kion_set");
+     if (mKionSet == NULL) {
 diff --git a/src/WeatherWeek.cpp b/src/WeatherWeek.cpp
 index 525ec6a..c246738 100644
 --- a/src/WeatherWeek.cpp

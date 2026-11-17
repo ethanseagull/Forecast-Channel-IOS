@@ -356,7 +356,7 @@ Off on the port (each marked in the source):
   is wide), centred, wider than the screen; an iPhone 15 Pro's canvas is about 182..650 x
   -266..722 in game units (360x988 EFB pixels, 2x). Each frame is laid out for the canvas when
   the game calls `port_portrait_canvas()` (WeatherScene: the forecast pages and the globe), else
-  letterboxed (settings, setup, errors). On the canvas every draw's clip space is mapped onto it
+  letterboxed (setup, error windows, the Home menu). On the canvas every draw's clip space is mapped onto it
   (`portrait_draw`, `gx_sdl.cpp`), so the 3D globe simply sees more and 2D parts can sit outside
   the frame; ortho draws exactly over the frame (fades, unmoved backgrounds) stretch over it;
   full-frame scissors and EFB copies cover it. Layout parts get portrait places when a layout
@@ -368,8 +368,11 @@ Off on the port (each marked in the source):
   bottom row; one-finger vertical swipe turns the page. Globe: End / Next and the title belt at
   the top, zoom and tilts in a column on the right, Restore bottom right, controls always up.
   iOS: portrait added to `Info.plist`; the orientation the app starts in is kept
-  (`SDL_HINT_ORIENTATIONS`). Not converted yet (letterboxed or as on the Wii): UV Index page,
-  the 6-hour detail, settings, setup, errors; the city detail card at the bottom of the globe.
+  (`SDL_HINT_ORIENTATIONS`). Also on the canvas: the UV Index page, Settings, "One moment,
+  please..." and the connection error (backgrounds over the screen, message box shrunk). The
+  globe's top row sits beside the Dynamic Island (the status bar is hidden). Not converted yet:
+  the 6-hour detail, setup (date, region, city), the error windows; the city detail card at the
+  bottom of the globe.
 
 ### Next (from `notes/64bit-audit.md`)
 - g3d `ResTexPlttInfoData` pointer members (globe materials), PAT0 bind arrays.
