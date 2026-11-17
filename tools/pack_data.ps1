@@ -56,9 +56,20 @@ if ($outDir) {
 if (Test-Path $Out) {
     Remove-Item -Force $Out
 }
+# Entries named with "/" (Windows PowerShell's CreateFromDirectory writes
+# "\", which unzip on the macOS runner rejects).
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory($stage, (Join-Path (Get-Location) $Out),
-    [System.IO.Compression.CompressionLevel]::Optimal, $false)
+$zip = [System.IO.Compression.ZipFile]::Open((Join-Path (Get-Location) $Out), [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    Get-ChildItem -Recurse -File $stage | ForEach-Object {
+        $rel = $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $rel,
+            [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+} finally {
+    $zip.Dispose()
+}
 Remove-Item -Recurse -Force $stage
 $mb = [math]::Round((Get-Item $Out).Length / 1MB, 1)
 Write-Host "Wrote $Out ($mb MB)"
