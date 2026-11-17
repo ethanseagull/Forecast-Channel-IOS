@@ -90,6 +90,31 @@ jobs:
             unzip -q "$RUNNER_TEMP/forecast-data.zip" -d "$app"
             rm "$RUNNER_TEMP/forecast-data.zip"
             du -sh "$app/channel" "$app/textures" 2>/dev/null || true
+            # The home screen icon (icon/AppIcon.png, 1024x1024, and an
+            # iOS 18 dark version), compiled into the bundle by actool.
+            if [ -f "$app/icon/AppIcon.png" ]; then
+              set -o pipefail
+              cat="$RUNNER_TEMP/Assets.xcassets"
+              set="$cat/AppIcon.appiconset"
+              mkdir -p "$set"
+              echo '{"info":{"author":"xcode","version":1}}' > "$cat/Contents.json"
+              cp "$app/icon/AppIcon.png" "$set/"
+              dark=""
+              if [ -f "$app/icon/AppIcon-dark.png" ]; then
+                cp "$app/icon/AppIcon-dark.png" "$set/"
+                dark=',{"appearances":[{"appearance":"luminosity","value":"dark"}],"filename":"AppIcon-dark.png","idiom":"universal","platform":"ios","size":"1024x1024"}'
+              fi
+              echo "{\"images\":[{\"filename\":\"AppIcon.png\",\"idiom\":\"universal\",\"platform\":\"ios\",\"size\":\"1024x1024\"}$dark],\"info\":{\"author\":\"xcode\",\"version\":1}}" > "$set/Contents.json"
+              rm -r "$app/icon"
+              if xcrun actool "$cat" --compile "$app" --platform iphoneos --minimum-deployment-target 15.0 \
+                  --app-icon AppIcon --output-partial-info-plist "$RUNNER_TEMP/icon.plist" \
+                  --target-device iphone --target-device ipad --output-format human-readable-text; then
+                /usr/libexec/PlistBuddy -c "Merge $RUNNER_TEMP/icon.plist" "$app/Info.plist"
+                ls "$app" | grep -i -E "appicon|assets.car" || true
+              else
+                echo "::warning::actool failed: the app keeps the default icon"
+              fi
+            fi
           else
             echo "::notice::No forecast-data.zip in the data release: a plain .ipa (channel files via the Files app)"
           fi

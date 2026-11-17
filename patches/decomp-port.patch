@@ -82,6 +82,22 @@ index b26a3bd..d8be398 100644
      ~ButtonColors();
  #else
      ~ButtonColors() {}
+diff --git a/include/channel/WeatherSetting.h b/include/channel/WeatherSetting.h
+index 8a22f8c..b0e1a77 100644
+--- a/include/channel/WeatherSetting.h
++++ b/include/channel/WeatherSetting.h
+@@ -13,6 +13,11 @@ public:
+ 
+     WeatherSetting(void* arc);
+     ~WeatherSetting();
++#ifdef FORECAST_PORT
++    // Turning the phone: the layouts (and what was measured from them) made
++    // again for the new shape, keeping the screen's state.
++    void PortraitRelayout(void* arc);
++#endif
+ 
+     void Reset();
+     void Draw();
 diff --git a/include/channel/WeatherViews.h b/include/channel/WeatherViews.h
 index 9696acd..d903ea5 100644
 --- a/include/channel/WeatherViews.h
@@ -2813,7 +2829,7 @@ index 4d956e5..0078ec9 100644
      mIconPane = mLayout->FindButton("life_b");
      if (mIconPane == NULL) {
 diff --git a/src/WeatherScene.cpp b/src/WeatherScene.cpp
-index 661a8c4..9ba189e 100644
+index 661a8c4..0171d59 100644
 --- a/src/WeatherScene.cpp
 +++ b/src/WeatherScene.cpp
 @@ -185,8 +185,8 @@ WeatherScene::WeatherScene()
@@ -2850,7 +2866,7 @@ index 661a8c4..9ba189e 100644
      if (!gFatalRequested) {
          if (mDrawFunc) {
              (this->*mDrawFunc)();
-@@ -310,7 +326,94 @@ void WeatherScene::unk2C() {
+@@ -310,7 +326,81 @@ void WeatherScene::unk2C() {
      gRainSound.Update();
  }
  
@@ -2865,69 +2881,56 @@ index 661a8c4..9ba189e 100644
 +        return;
 +    }
 +    BOOL views = mNormal != NULL && mAround != NULL && mSetting != NULL;
-+    // Setup (date, region, city), or "One moment, please..." before the
-+    // views exist: setup's and Connect's layouts are made again in place;
-+    // the views, if any, are not showing and are simply made again.
-+    if (mDrawFunc == &WeatherScene::DrawAddress || mDrawFunc == &WeatherScene::DrawError ||
-+        (mDrawFunc == &WeatherScene::DrawConnect && !views)) {
-+        port_layout_commit();
-+        if (mAddress != NULL) {
-+            mAddress->PortraitRelayout(mLayoutArc);
-+        }
-+        if (mConnect != NULL) {
-+            mConnect->RebuildLayouts(mLayoutArc);
-+        }
-+        if (mErrorWindow != NULL) {
-+            mErrorWindow->RebuildLayouts(mLayoutArc);
-+        }
-+        if (views) {
-+            s32 page = gForecastPage;
-+            delete mNormal;
-+            delete mAround;
-+            delete mSetting;
-+            mNormal = new WeatherNormal(mLayoutArc);
-+            mAround = new WeatherAround(mLayoutArc);
-+            mSetting = new WeatherSetting(mLayoutArc);
-+            gForecastPage = page;
-+            mNormal->Reset();
-+            mAround->Reset();
-+            mSetting->Reset();
-+        }
-+        ClearHoveredButtons();
-+        return;
-+    }
-+    if (!views) {
-+        return;
-+    }
-+    BOOL pages = mState == &WeatherScene::StateNormal && mStatePhase == 1 && gSettingResult != 3 &&
++    // Settings, setup (date, region, city), an error window, or "One moment,
++    // please..." before the views exist: their layouts are made again in
++    // place; the views not showing are simply made again.
++    BOOL setting = views && mDrawFunc == &WeatherScene::DrawSetting;
++    BOOL other = mDrawFunc == &WeatherScene::DrawAddress || mDrawFunc == &WeatherScene::DrawError ||
++                 (mDrawFunc == &WeatherScene::DrawConnect && !views);
++    // The forecast pages or the globe, sitting idle: made again and put
++    // back where they were.
++    BOOL pages = views && mState == &WeatherScene::StateNormal && mStatePhase == 1 && gSettingResult != 3 &&
 +                 gSettingResult != 4 && gSettingResult != 5 && mNormal->mActive &&
 +                 mNormal->mState == &WeatherNormal::StateNormal && mNormal->mPhase == 1 && !mNormal->mZoomed;
-+    BOOL globe = mState == &WeatherScene::StateAround && mStatePhase == 1 && gSettingResult != 2 &&
++    BOOL globe = views && mState == &WeatherScene::StateAround && mStatePhase == 1 && gSettingResult != 2 &&
 +                 gSettingResult != 6 && mAround->mActive;
-+    if (!pages && !globe) {
++    if (!setting && !other && !pages && !globe) {
 +        return;
 +    }
 +    port_layout_commit();
-+    s32 page = gForecastPage;
-+    delete mNormal;
-+    delete mAround;
-+    delete mSetting;
-+    mNormal = new WeatherNormal(mLayoutArc);
-+    mAround = new WeatherAround(mLayoutArc);
-+    mSetting = new WeatherSetting(mLayoutArc);
-+    gForecastPage = page; // the pages' constructor starts at Current
-+    mNormal->Reset();
-+    mAround->Reset();
-+    mSetting->Reset();
++    if (mAddress != NULL) {
++        mAddress->PortraitRelayout(mLayoutArc);
++    }
 +    if (mConnect != NULL) {
 +        mConnect->RebuildLayouts(mLayoutArc);
 +    }
++    if (mErrorWindow != NULL) {
++        mErrorWindow->RebuildLayouts(mLayoutArc);
++    }
++    if (views) {
++        s32 page = gForecastPage;
++        delete mNormal;
++        delete mAround;
++        mNormal = new WeatherNormal(mLayoutArc);
++        mAround = new WeatherAround(mLayoutArc);
++        gForecastPage = page; // the pages' constructor starts at Current
++        mNormal->Reset();
++        mAround->Reset();
++        if (setting) {
++            mSetting->PortraitRelayout(mLayoutArc);
++        } else {
++            delete mSetting;
++            mSetting = new WeatherSetting(mLayoutArc);
++            mSetting->Reset();
++        }
++    }
 +    ClearHoveredButtons();
-+    mNormal->SetCity();
 +    if (pages) {
++        mNormal->SetCity();
 +        mAround->unk250 = TRUE;
 +        mNormal->Open();
-+    } else {
++    } else if (globe) {
++        mNormal->SetCity();
 +        mNormal->OpenAround();
 +        mNormal->mActive = FALSE;
 +        mAround->mActive = TRUE;
@@ -2945,7 +2948,7 @@ index 661a8c4..9ba189e 100644
      if (gHoldAll) {
          sHoldTimer = 300;
      } else if (sHoldTimer != 0) {
-@@ -523,14 +626,22 @@ void WeatherScene::DrawNormal() {
+@@ -523,14 +613,22 @@ void WeatherScene::DrawNormal() {
      }
  
      nw4r::math::VEC3 pos(sTitlePos.x, sTitlePos.y + gTitleOffsetY, sTitlePos.z);
@@ -2971,7 +2974,7 @@ index 661a8c4..9ba189e 100644
          TPLPalette* tpl = gCommonTpl;
          u32 icon = 3;
 diff --git a/src/WeatherSetting.cpp b/src/WeatherSetting.cpp
-index 1fef7a3..94f6b76 100644
+index 1fef7a3..dac6bfd 100644
 --- a/src/WeatherSetting.cpp
 +++ b/src/WeatherSetting.cpp
 @@ -23,6 +23,10 @@ WeatherSetting::WeatherSetting(void* arc)
@@ -2985,6 +2988,46 @@ index 1fef7a3..94f6b76 100644
  
      mKionSet = mSetLayout->FindButton("kion_set");
      if (mKionSet == NULL) {
+@@ -102,6 +106,39 @@ WeatherSetting::WeatherSetting(void* arc)
+     ChangeState(&WeatherSetting::StateIdle);
+ }
+ 
++#ifdef FORECAST_PORT
++void WeatherSetting::PortraitRelayout(void* arc) {
++    // A new Settings view is laid out for the new shape; its layouts and
++    // measurements move here, this one's old layouts go with it.
++    // What the value buttons show (the choice being made) carries over.
++    s32 kion = mKionSet->mState, wind = mWindSet != NULL ? mWindSet->mState : -1;
++    WeatherSetting* fresh = new WeatherSetting(arc);
++#define SWAP_FIELD(f)                                                                                            {                                                                                                                __typeof__(f) t = f;                                                                                         f = fresh->f;                                                                                                fresh->f = t;                                                                                            }
++    SWAP_FIELD(mSetLayout);
++    SWAP_FIELD(mBaseLayout);
++    SWAP_FIELD(mKionSet);
++    SWAP_FIELD(mCitySet);
++    SWAP_FIELD(mWindSet);
++    SWAP_FIELD(mKionBtn);
++    SWAP_FIELD(mCityBtn);
++    SWAP_FIELD(mWindBtn);
++    SWAP_FIELD(mTextX);
++    SWAP_FIELD(mTextY);
++    SWAP_FIELD(mTextMaxWidth);
++    SWAP_FIELD(mTextHeight);
++    SWAP_FIELD(mTextScaleX);
++    SWAP_FIELD(mTextScaleY);
++    SWAP_FIELD(mTextCharSpace);
++#undef SWAP_FIELD
++    delete fresh;
++    Reset();
++    mKionSet->SetState(kion);
++    if (mWindSet != NULL && wind >= 0) {
++        mWindSet->SetState(wind);
++    }
++}
++#endif
++
+ WeatherSetting::~WeatherSetting() {
+     delete mBaseLayout;
+     delete mSetLayout;
 diff --git a/src/WeatherWeek.cpp b/src/WeatherWeek.cpp
 index 525ec6a..c246738 100644
 --- a/src/WeatherWeek.cpp

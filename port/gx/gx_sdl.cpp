@@ -615,9 +615,16 @@ static FramePlace frame_place(void) {
     return f;
 }
 
+static void ensure_efb(void);
+
 static void frame_open(void) {
     if (!sFrameOpen) {
         sFrameOpen = true;
+        // The game may have rebuilt its screens for a turned window in this
+        // frame's update (port_layout_commit): size the EFB for that before
+        // the first draw, or this frame would still be drawn for the old
+        // shape (a one-frame flicker).
+        ensure_efb();
         bool canvas = port_portrait_take_canvas();
         // Testing: FORECAST_PORTRAIT_CANVAS=n puts every frame from frame n on
         // on the canvas.
@@ -1349,7 +1356,21 @@ static void compose(SDL_GPUCommandBuffer* cb, SDL_GPUTexture* target, Uint32 tw,
     SDL_EndGPURenderPass(rp);
 }
 
+// Turning the phone: the frames between the window turning and the game
+// rebuilding its screens for it would show the old layout shrunk to fit;
+// for a few frames the window keeps the last picture instead.
+#define TURN_HOLD_FRAMES 8
+static u32 sTurnHeld;
+
 static void present(SDL_GPUCommandBuffer* cb) {
+    if (port_layout_pending()) {
+        if (sTurnHeld < TURN_HOLD_FRAMES) {
+            sTurnHeld++;
+            return;
+        }
+    } else {
+        sTurnHeld = 0;
+    }
     SDL_GPUTexture* sw = NULL;
     Uint32 sw_w = 0, sw_h = 0;
     Uint64 waitStart = SDL_GetTicksNS();

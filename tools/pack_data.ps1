@@ -11,9 +11,14 @@
 # the app would compress anyway). The zip holds Nintendo data: it never goes
 # into the repository, only into the private repo's release, and the .ipa
 # built from it is for the user's own phone.
+#
+# -Icon: a folder with AppIcon.png (1024x1024) and optionally AppIcon-dark.png
+# (iOS 18 dark mode); the workflow makes them the app's icon. The icon is
+# made from the channel's own artwork, so it travels here, not in git.
 param(
     [string]$Channel = "HAFE_v7",
     [string]$Textures = "build\windows\data\textures",
+    [string]$Icon = "build\ios\icon",
     [string]$Out = "build\ios\forecast-data.zip",
     [switch]$Upload
 )
@@ -47,6 +52,17 @@ if (Test-Path $Textures) {
     if ($LASTEXITCODE -ne 0) { throw "texpack_compress failed" }
 } else {
     Write-Host "No texture packs at $Textures; the zip holds the channel files only."
+}
+
+if (Test-Path (Join-Path $Icon "AppIcon.png")) {
+    New-Item -ItemType Directory -Force (Join-Path $stage "icon") | Out-Null
+    foreach ($n in "AppIcon.png", "AppIcon-dark.png") {
+        if (Test-Path (Join-Path $Icon $n)) {
+            Copy-Item (Join-Path $Icon $n) (Join-Path $stage "icon\$n")
+        }
+    }
+} else {
+    Write-Host "No $Icon\AppIcon.png; the app keeps the default icon."
 }
 
 $outDir = Split-Path -Parent $Out
